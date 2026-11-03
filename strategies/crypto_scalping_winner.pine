@@ -1,0 +1,980 @@
+//@version=6
+strategy("Crypto Scalping Winner", shorttitle="Scalp", overlay=true,
+         default_qty_type=strategy.percent_of_equity, default_qty_value=25,
+         commission_type=strategy.commission.percent, commission_value=0.1,
+         pyramiding=0, close_entries_rule="ANY", calc_on_every_tick=true)
+
+// === CRYPTO-OPTIMIZED INPUTS ===
+// EMA Settings (Reduced noise for better signals)
+ema_fast = input.int(12, title="Fast EMA", minval=8, maxval=21)
+ema_slow = input.int(26, title="Slow EMA", minval=20, maxval=55)
+ema_trend = input.int(100, title="Trend EMA", minval=50, maxval=200)
+
+// Bollinger Bands (Stricter breakouts)
+bb_length = input.int(20, title="BB Length", minval=15, maxval=50)
+bb_mult = input.float(2.5, title="BB Multiplier", minval=2.0, maxval=3.5)
+
+// RSI Settings (More conservative)
+rsi_length = input.int(14, title="RSI Length", minval=10, maxval=21)
+rsi_overbought = input.int(75, title="RSI Overbought", minval=70, maxval=85)
+rsi_oversold = input.int(25, title="RSI Oversold", minval=15, maxval=35)
+
+// MACD (Trend momentum)
+macd_fast = input.int(12, title="MACD Fast", minval=8, maxval=16)
+macd_slow = input.int(26, title="MACD Slow", minval=20, maxval=34)
+macd_signal = input.int(9, title="MACD Signal", minval=7, maxval=12)
+
+// Stochastic RSI (Momentum oscillator)
+stoch_k = input.int(3, title="Stochastic %K", minval=1, maxval=10)
+stoch_d = input.int(3, title="Stochastic %D", minval=1, maxval=10)
+stoch_rsi_length = input.int(14, title="Stochastic RSI Length", minval=8, maxval=21)
+
+// Williams %R (Overbought/Oversold)
+williams_length = input.int(14, title="Williams %R Length", minval=10, maxval=21)
+
+// CCI (Commodity Channel Index)
+cci_length = input.int(20, title="CCI Length", minval=14, maxval=30)
+
+// Awesome Oscillator
+ao_fast = input.int(5, title="AO Fast SMA", minval=3, maxval=10)
+ao_slow = input.int(34, title="AO Slow SMA", minval=20, maxval=50)
+
+// ADVANCED VOLUME ANALYSIS (Institutional Grade)
+volume_lookback = input.int(30, title="Volume Lookback", minval=20, maxval=50)
+volume_surge_mult = input.float(2.5, title="Volume Surge Multiplier", minval=2.0, maxval=4.0)
+volume_ma_type = input.string("SMA", title="Volume MA Type", options=["SMA", "EMA"], tooltip="Moving average type for volume analysis")
+use_volume_profile = input.bool(true, title="Volume Profile Analysis", tooltip="Use advanced volume profile techniques")
+volume_breakout_mult = input.float(3.0, title="Breakout Volume Multiplier", minval=2.5, maxval=5.0, tooltip="Volume required for valid breakouts")
+
+// Confluence Settings (Highly Selective for Better Performance)
+confluence_threshold = input.int(8, title="Minimum Confluence Score", minval=6, maxval=15, tooltip="Minimum confluence score (out of 25 total: 10 technical + 15 institutional patterns)")
+pattern_boost = input.bool(true, title="Pattern Recognition Boost", tooltip="Give extra weight to strong pattern signals")
+institutional_filter = input.bool(true, title="Institutional Pattern Filter", tooltip="Require at least one institutional pattern for entry")
+market_structure_filter = input.bool(true, title="Market Structure Filter", tooltip="Only trade with proper market structure")
+trend_strength_min = input.float(0.025, title="Minimum Trend Strength", minval=0.01, maxval=0.05, tooltip="Minimum trend strength required for entry")
+
+// Advanced Filters for Better Performance
+min_volume_filter = input.bool(true, title="Enable Minimum Volume Filter", tooltip="Require above-average volume")
+trend_strength_filter = input.bool(true, title="Enable Trend Strength Filter", tooltip="Require strong trend momentum")
+volatility_filter = input.bool(true, title="Enable Volatility Filter", tooltip="Filter out low volatility periods")
+market_hours_filter = input.bool(true, title="High Activity Hours Only", tooltip="Trade only during high liquidity hours")
+momentum_confirmation = input.bool(true, title="Momentum Confirmation", tooltip="Require momentum alignment across timeframes")
+
+// Risk Management (Dynamic & Performance-Optimized)
+use_dynamic_stops = input.bool(true, title="Use Dynamic Stops", tooltip="Adjust stops based on volatility and market structure")
+stop_loss_pct = input.float(2.2, title="Base Stop Loss %", minval=1.8, maxval=4.0, tooltip="Base stop loss, adjusted dynamically")
+take_profit_1_pct = input.float(4.5, title="Take Profit 1 %", minval=3.0, maxval=6.0, tooltip="Quick profit taking - 50% position")
+take_profit_2_pct = input.float(8.5, title="Take Profit 2 %", minval=6.0, maxval=12.0, tooltip="Extended target - 35% position")
+take_profit_3_pct = input.float(16.0, title="Take Profit 3 %", minval=12.0, maxval=25.0, tooltip="Runner for elite setups - 15% position")
+risk_reward_min = input.float(3.0, title="Minimum Risk:Reward Ratio", minval=2.5, maxval=5.0, tooltip="Only take trades with this R:R minimum")
+max_trades_per_day = input.int(3, title="Max Trades Per Day", minval=1, maxval=10, tooltip="Limit daily trades for quality")
+
+// Session Filter (Crypto is 24/7 but some times are more volatile)
+use_session_filter = input.bool(false, title="Use Session Filter")
+session_start = input.int(8, title="Active Start Hour (UTC)", minval=0, maxval=23)
+session_end = input.int(20, title="Active End Hour (UTC)", minval=0, maxval=23)
+
+// === CALCULATIONS ===
+// EMAs
+ema_fast_line = ta.ema(close, ema_fast)
+ema_slow_line = ta.ema(close, ema_slow)
+ema_trend_line = ta.ema(close, ema_trend)
+
+// Bollinger Bands
+bb_basis = ta.sma(close, bb_length)
+bb_dev = bb_mult * ta.stdev(close, bb_length)
+bb_upper = bb_basis + bb_dev
+bb_lower = bb_basis - bb_dev
+
+// RSI
+rsi = ta.rsi(close, rsi_length)
+
+// MACD
+[macd_line, macd_signal_line, macd_hist] = ta.macd(close, macd_fast, macd_slow, macd_signal)
+
+// Stochastic RSI
+rsi_for_stoch = ta.rsi(close, stoch_rsi_length)
+stoch_rsi = ta.stoch(rsi_for_stoch, rsi_for_stoch, rsi_for_stoch, stoch_rsi_length)
+stoch_k_line = ta.sma(stoch_rsi, stoch_k)
+stoch_d_line = ta.sma(stoch_k_line, stoch_d)
+
+// Williams %R
+williams_r = ta.wpr(williams_length)
+
+// CCI (Commodity Channel Index)
+cci = ta.cci(close, cci_length)
+
+// Awesome Oscillator
+ao_fast_sma = ta.sma(hl2, ao_fast)
+ao_slow_sma = ta.sma(hl2, ao_slow)
+ao = ao_fast_sma - ao_slow_sma
+
+// === ADVANCED VOLUME ANALYSIS SYSTEM ===
+// Multiple Volume Moving Averages for sophisticated analysis
+volume_sma_10 = ta.sma(volume, 10)
+volume_sma_15 = ta.sma(volume, 15) 
+volume_sma_20 = ta.sma(volume, 20)
+volume_sma_30 = ta.sma(volume, 30)
+volume_sma_50 = ta.sma(volume, 50)
+volume_ema_20 = ta.ema(volume, 20)
+
+// Dynamic Volume Average (adapts to market conditions)
+volume_avg = volume_ma_type == "EMA" ? volume_ema_20 : volume_sma_20
+
+// Volume Surge Analysis (Multiple Levels)
+volume_surge_mild = volume > volume_avg * 1.5        // 50% above average
+volume_surge = volume > volume_avg * volume_surge_mult  // Strong surge
+volume_surge_extreme = volume > volume_avg * 4.0     // Institutional activity
+volume_above_avg = volume > volume_avg
+
+// Volume Trend Analysis
+volume_trend_up = volume_sma_10 > volume_sma_20 and volume_sma_20 > volume_sma_50
+volume_trend_down = volume_sma_10 < volume_sma_20 and volume_sma_20 < volume_sma_50
+
+// Volume Breakout Confirmation (Critical for crypto)
+volume_breakout_confirmation = volume > volume_avg * volume_breakout_mult
+
+// Accumulation/Distribution Volume Pattern (Smart Money Detection)
+volume_accumulation = volume > volume_sma_20 * 1.3 and close > open and close > close[1]
+volume_distribution = volume > volume_sma_20 * 1.3 and close < open and close < close[1]
+
+// Volume Divergence Analysis (Price vs Volume)
+price_higher = high > high[5]
+price_lower = low < low[5]
+volume_higher = volume > volume[5]
+volume_lower = volume < volume[5]
+bullish_volume_divergence = price_lower and volume_higher  // Price down, volume up = bullish
+bearish_volume_divergence = price_higher and volume_lower  // Price up, volume down = bearish
+
+// Body size calculation (needed for SMA)
+body_size = math.abs(close - open)
+
+// Body size SMA for pattern calculations
+body_sma_10 = ta.sma(body_size, 10)
+
+// Close SMA for pattern calculations
+close_sma_5 = ta.sma(close, 5)
+close_sma_20 = ta.sma(close, 20)
+
+// Volatility Analysis (Global ATR calculation for consistency)
+atr_value = ta.atr(14)
+atr_14 = ta.atr(14)  // Global ATR for all calculations
+
+// EMA Crossover Analysis (Global calculations for consistent results)
+ema_crossover_signal = ta.crossover(ema_fast_line, ema_slow_line)
+ema_crossunder_signal = ta.crossunder(ema_fast_line, ema_slow_line)
+
+// Global calculations for highest/lowest values for consistency
+highest_high_10 = ta.highest(high, 10)
+highest_high_20 = ta.highest(high, 20)
+highest_high_50 = ta.highest(high, 50)
+lowest_low_10 = ta.lowest(low, 10)
+lowest_low_20 = ta.lowest(low, 20)
+lowest_low_50 = ta.lowest(low, 50)
+highest_volume_20 = ta.highest(volume, 20)
+
+// Support & Resistance Levels (Declared early for use in patterns)
+pivot_high = ta.pivothigh(high, 5, 5)
+pivot_low = ta.pivotlow(low, 5, 5)
+var float resistance_level = na
+var float support_level = na
+
+if not na(pivot_high)
+    resistance_level := pivot_high
+if not na(pivot_low)
+    support_level := pivot_low
+
+// === ENHANCED PATTERN RECOGNITION ===
+// Candlestick Patterns
+upper_shadow = high - math.max(open, close)
+lower_shadow = math.min(open, close) - low
+avg_body = ta.sma(body_size, 10)
+
+// Bullish Candlestick Patterns
+hammer = lower_shadow > body_size * 2 and upper_shadow < body_size * 0.5 and close > open
+inverted_hammer = upper_shadow > body_size * 2 and lower_shadow < body_size * 0.5
+bullish_engulfing = close > open and close[1] < open[1] and open < close[1] and close > open[1]
+morning_star = close[2] < open[2] and body_size[1] < avg_body * 0.3 and close > open and close > (open[2] + close[2]) / 2
+piercing_line = close[1] < open[1] and close > open and close > (open[1] + close[1]) / 2 and close < open[1]
+bullish_harami = body_size < body_size[1] * 0.6 and close > open and close[1] < open[1] and open > close[1] and close < open[1]
+
+// Bearish Candlestick Patterns  
+shooting_star = upper_shadow > body_size * 2 and lower_shadow < body_size * 0.5 and close < open
+hanging_man = lower_shadow > body_size * 2 and upper_shadow < body_size * 0.5 and close < open
+bearish_engulfing = close < open and close[1] > open[1] and open > close[1] and close < open[1]
+evening_star = close[2] > open[2] and body_size[1] < avg_body * 0.3 and close < open and close < (open[2] + close[2]) / 2
+dark_cloud = close[1] > open[1] and close < open and close < (open[1] + close[1]) / 2 and close > open[1]
+bearish_harami = body_size < body_size[1] * 0.6 and close < open and close[1] > open[1] and open < close[1] and close > open[1]
+
+// Neutral Patterns
+doji = body_size <= (high - low) * 0.1
+spinning_top = body_size < avg_body * 0.5 and upper_shadow > body_size and lower_shadow > body_size
+
+// Chart Patterns - Support/Resistance Breakouts
+resistance_break = close > resistance_level and close[1] <= resistance_level and not na(resistance_level)
+support_break = close < support_level and close[1] >= support_level and not na(support_level)
+
+// Price Action Patterns
+higher_high = high > highest_high_10[1]
+lower_low = low < lowest_low_10[1]
+higher_low = low > ta.lowest(low, 5)[1] and low[5] < ta.lowest(low, 10)[6]
+lower_high = high < ta.highest(high, 5)[1] and high[5] > ta.highest(high, 10)[6]
+
+// Gap Patterns
+gap_up = low > high[1]
+gap_down = high < low[1]
+gap_filled_up = low[1] > high[2] and low <= high[2]
+gap_filled_down = high[1] < low[2] and high >= low[2]
+
+// ENHANCED VOLUME PATTERNS (Institutional Grade)
+volume_spike = volume > volume_sma_20 * 2.5
+volume_dry_up = volume < volume_sma_20 * 0.5
+volume_climax = volume > highest_volume_20[1]
+
+// Advanced Volume Patterns
+volume_explosion = volume > volume_sma_20 * 5.0  // Massive institutional activity
+volume_exhaustion = volume > volume_sma_20 * 3.0 and close < open  // Selling climax
+volume_thrust = volume > volume_sma_20 * 3.0 and close > open  // Buying climax
+volume_stealth = volume < volume_sma_20 * 0.7 and math.abs(close - open) > atr_14 * 1.5  // Smart money stealth
+
+// Volume Confirmation for Price Action
+breakout_volume_valid = (close > highest_high_20[1] or close < lowest_low_20[1]) and volume_breakout_confirmation
+false_breakout_likely = (close > highest_high_20[1] or close < lowest_low_20[1]) and volume < volume_avg
+
+// Volume-Price Relationship (Most Important for Crypto)
+healthy_uptrend_volume = close > close[1] and volume > volume_avg  // Volume supports price
+healthy_downtrend_volume = close < close[1] and volume > volume_avg  // Volume confirms decline
+weak_uptrend_volume = close > close[1] and volume < volume_avg * 0.8  // Weak volume on up move
+weak_downtrend_volume = close < close[1] and volume < volume_avg * 0.8  // Weak volume on down move
+
+// Consolidation Patterns (inside bars, narrow range bars)
+inside_bar = high < high[1] and low > low[1]
+narrow_range = (high - low) < atr_14 * 0.5
+wide_range = (high - low) > atr_14 * 1.5
+
+// === ADVANCED CHART PATTERNS ===
+// Triangle Patterns
+ascending_triangle = lowest_low_10 > lowest_low_20[10] and highest_high_10 <= highest_high_20[10] + atr_14 * 0.5
+descending_triangle = highest_high_10 < highest_high_20[10] and lowest_low_10 >= lowest_low_20[10] - atr_14 * 0.5
+symmetrical_triangle = (highest_high_10 - lowest_low_10) < (highest_high_20[10] - lowest_low_20[10]) * 0.8
+
+// Enhanced Head and Shoulders Patterns
+// More realistic H&S detection using pivot points
+h_s_lookback = 8
+left_shoulder_pivot = ta.pivothigh(high, h_s_lookback, h_s_lookback)
+head_pivot = ta.pivothigh(high, h_s_lookback, h_s_lookback) 
+right_shoulder_pivot = ta.pivothigh(high, h_s_lookback, h_s_lookback)
+
+// Store pivot values
+var float ls_high = na
+var float head_high = na
+var float rs_high = na
+var int ls_bar = 0
+var int head_bar = 0
+var int rs_bar = 0
+
+// Track left shoulder
+if not na(left_shoulder_pivot) and bar_index - ls_bar > h_s_lookback * 2
+    ls_high := left_shoulder_pivot
+    ls_bar := bar_index
+
+// Track head (must be higher than left shoulder)
+if not na(head_pivot) and not na(ls_high) and head_pivot > ls_high and bar_index - head_bar > h_s_lookback
+    head_high := head_pivot  
+    head_bar := bar_index
+
+// Track right shoulder (similar height to left shoulder, lower than head)
+if not na(right_shoulder_pivot) and not na(head_high) and not na(ls_high)
+    if right_shoulder_pivot < head_high and math.abs(right_shoulder_pivot - ls_high) < atr_14 * 2
+        rs_high := right_shoulder_pivot
+        rs_bar := bar_index
+
+// Neckline calculation (lows between shoulders and head)
+neckline_left = bar_index > head_bar and bar_index < head_bar + h_s_lookback ? ta.lowest(low, h_s_lookback) : na
+neckline_right = bar_index > rs_bar and bar_index < rs_bar + h_s_lookback ? ta.lowest(low, h_s_lookback) : na
+neckline_level = not na(neckline_left) and not na(neckline_right) ? math.min(neckline_left, neckline_right) : na
+
+// H&S completion conditions
+head_shoulders = not na(ls_high) and not na(head_high) and not na(rs_high) and 
+     not na(neckline_level) and close < neckline_level and close[1] >= neckline_level and
+     rs_bar - ls_bar > h_s_lookback * 3 and rs_bar - ls_bar < h_s_lookback * 8
+
+// Inverse Head and Shoulders (same logic inverted)
+inv_ls_pivot = ta.pivotlow(low, h_s_lookback, h_s_lookback)
+inv_head_pivot = ta.pivotlow(low, h_s_lookback, h_s_lookback)
+inv_rs_pivot = ta.pivotlow(low, h_s_lookback, h_s_lookback)
+
+var float inv_ls_low = na
+var float inv_head_low = na  
+var float inv_rs_low = na
+var int inv_ls_bar = 0
+var int inv_head_bar = 0
+var int inv_rs_bar = 0
+
+// Track inverse pattern
+if not na(inv_ls_pivot) and bar_index - inv_ls_bar > h_s_lookback * 2
+    inv_ls_low := inv_ls_pivot
+    inv_ls_bar := bar_index
+
+if not na(inv_head_pivot) and not na(inv_ls_low) and inv_head_pivot < inv_ls_low and bar_index - inv_head_bar > h_s_lookback
+    inv_head_low := inv_head_pivot
+    inv_head_bar := bar_index
+
+if not na(inv_rs_pivot) and not na(inv_head_low) and not na(inv_ls_low)
+    if inv_rs_pivot > inv_head_low and math.abs(inv_rs_pivot - inv_ls_low) < atr_14 * 2
+        inv_rs_low := inv_rs_pivot
+        inv_rs_bar := bar_index
+
+// Inverse neckline (highs between shoulders and head)
+inv_neckline_left = bar_index > inv_head_bar and bar_index < inv_head_bar + h_s_lookback ? ta.highest(high, h_s_lookback) : na
+inv_neckline_right = bar_index > inv_rs_bar and bar_index < inv_rs_bar + h_s_lookback ? ta.highest(high, h_s_lookback) : na
+inv_neckline_level = not na(inv_neckline_left) and not na(inv_neckline_right) ? math.max(inv_neckline_left, inv_neckline_right) : na
+
+inv_head_shoulders = not na(inv_ls_low) and not na(inv_head_low) and not na(inv_rs_low) and
+     not na(inv_neckline_level) and close > inv_neckline_level and close[1] <= inv_neckline_level and
+     inv_rs_bar - inv_ls_bar > h_s_lookback * 3 and inv_rs_bar - inv_ls_bar < h_s_lookback * 8
+
+// Cup and Handle Pattern
+cup_depth = 20
+handle_length = 10
+cup_left = ta.highest(high, cup_depth)[cup_depth]
+cup_bottom = ta.lowest(low, cup_depth)[cup_depth/2]
+cup_right = ta.highest(high, handle_length)
+cup_handle = high < cup_right * 0.95 and low > cup_bottom * 1.1
+cup_pattern = cup_left > cup_bottom * 1.15 and cup_right > cup_bottom * 1.15 and cup_handle
+
+// Flag and Pennant Patterns
+flagpole_up = close > close[10] * 1.05  // Strong upward move
+flag_consolidation = ta.highest(high, 5) - ta.lowest(low, 5) < atr_14 * 2
+bull_flag = flagpole_up and flag_consolidation and close > close_sma_5
+
+flagpole_down = close < close[10] * 0.95  // Strong downward move
+bear_flag = flagpole_down and flag_consolidation and close < close_sma_5
+
+// Wedge Patterns
+rising_wedge = ta.linreg(high, 10, 0) > 0 and ta.linreg(low, 10, 0) > 0 and ta.linreg(high, 10, 0) > ta.linreg(low, 10, 0) * 2
+falling_wedge = ta.linreg(high, 10, 0) < 0 and ta.linreg(low, 10, 0) < 0 and math.abs(ta.linreg(low, 10, 0)) > math.abs(ta.linreg(high, 10, 0)) * 2
+
+// Channel Patterns
+upper_channel = ta.linreg(high, 20, 0)
+lower_channel = ta.linreg(low, 20, 0)
+channel_breakout_up = close > ta.linreg(high, 20, 0) * (bar_index - 20) + ta.highest(high, 20)[20]
+channel_breakout_down = close < ta.linreg(low, 20, 0) * (bar_index - 20) + ta.lowest(low, 20)[20]
+
+// Double Top/Bottom Patterns
+peak1 = ta.pivothigh(high, 5, 5)[10]
+peak2 = ta.pivothigh(high, 5, 5)
+valley_between = ta.lowest(low, 10)[5]
+double_top = not na(peak1) and not na(peak2) and math.abs(peak1 - peak2) < atr_14 and valley_between < peak1 * 0.95
+
+trough1 = ta.pivotlow(low, 5, 5)[10] 
+trough2 = ta.pivotlow(low, 5, 5)
+peak_between = ta.highest(high, 10)[5]
+double_bottom = not na(trough1) and not na(trough2) and math.abs(trough1 - trough2) < atr_14 and peak_between > trough1 * 1.05
+
+// Rectangle Pattern (Trading Range)
+range_high = highest_high_20
+range_low = lowest_low_20
+range_size = range_high - range_low
+rectangle_pattern = range_size > atr_14 * 3 and range_size < atr_14 * 8
+rectangle_breakout_up = rectangle_pattern and close > range_high
+rectangle_breakout_down = rectangle_pattern and close < range_low
+
+// Fibonacci Retracement Patterns
+fib_high = highest_high_50
+fib_low = lowest_low_50
+fib_range = fib_high - fib_low
+fib_23_6 = fib_high - fib_range * 0.236
+fib_38_2 = fib_high - fib_range * 0.382
+fib_50_0 = fib_high - fib_range * 0.5
+fib_61_8 = fib_high - fib_range * 0.618
+fib_bounce_236 = low <= fib_23_6 and close > fib_23_6 and low[1] > fib_23_6
+fib_bounce_382 = low <= fib_38_2 and close > fib_38_2 and low[1] > fib_38_2
+fib_bounce_50 = low <= fib_50_0 and close > fib_50_0 and low[1] > fib_50_0
+fib_bounce_618 = low <= fib_61_8 and close > fib_61_8 and low[1] > fib_61_8
+
+// === INSTITUTIONAL & HIGH-PROBABILITY PATTERNS ===
+
+// 1. Break of Structure (BOS) - Market Structure Patterns
+higher_high_bos = high > ta.highest(high[1], 10) and volume > volume_sma_20 * 1.5
+lower_low_bos = low < ta.lowest(low[1], 10) and volume > volume_sma_20 * 1.5
+bos_bullish = higher_high_bos and close > open
+bos_bearish = lower_low_bos and close < open
+
+// 2. Order Block Patterns (Institutional Support/Resistance)
+ob_lookback = 20
+ob_threshold = atr_14 * 2
+lowest_low_20_ob = ta.lowest(low, ob_lookback)
+highest_high_20_ob = ta.highest(high, ob_lookback)
+bullish_ob = low[3] == lowest_low_20_ob[3] and close > high[3] and (high[3] - low[3]) > ob_threshold
+bearish_ob = high[3] == highest_high_20_ob[3] and close < low[3] and (high[3] - low[3]) > ob_threshold
+
+// 3. Fair Value Gap (FVG) - Institutional Imbalance
+fvg_up = low > high[2] and close > open and volume > volume_sma_10 * 2
+fvg_down = high < low[2] and close < open and volume > volume_sma_10 * 2
+
+// 4. Liquidity Sweep Patterns 
+liquidity_high = highest_high_50
+liquidity_low = lowest_low_50 
+sweep_high = high > liquidity_high[1] and close < liquidity_high[1] and volume > volume_sma_20 * 2
+sweep_low = low < liquidity_low[1] and close > liquidity_low[1] and volume > volume_sma_20 * 2
+
+// 5. Divergence Patterns (Hidden & Regular)
+// RSI Divergence
+rsi_higher_high = rsi > rsi[5] and high > high[5]
+rsi_lower_low = rsi < rsi[5] and low < low[5]
+rsi_bullish_div = high[5] < high and rsi[5] > rsi // Price higher, RSI lower = bearish div (for shorts)
+rsi_bearish_div = low[5] > low and rsi[5] < rsi // Price lower, RSI higher = bullish div (for longs)
+
+// MACD Divergence
+macd_bullish_div = low[5] > low and macd_line[5] < macd_line and macd_line < 0
+macd_bearish_div = high[5] < high and macd_line[5] > macd_line and macd_line > 0
+
+// 6. Wyckoff Accumulation/Distribution
+// Simplified Wyckoff Spring (Accumulation)
+wyckoff_spring = low < lowest_low_20[5] and close > lowest_low_20[5] and volume > volume_sma_30 * 1.8
+// Simplified Wyckoff UTAD (Distribution) 
+wyckoff_utad = high > highest_high_20[5] and close < highest_high_20[5] and volume > volume_sma_30 * 1.8
+
+// 7. Smart Money Concepts - Change of Character (CHoCH)
+choch_bullish = ta.crossover(close, highest_high_10[1]) and volume > volume_sma_20 * 1.5
+choch_bearish = ta.crossunder(close, lowest_low_10[1]) and volume > volume_sma_20 * 1.5
+
+// 8. Market Maker Patterns
+// Stop Hunt Reversal
+lowest_low_30 = ta.lowest(low, 30)
+highest_high_30 = ta.highest(high, 30)
+stop_hunt_bull = low < lowest_low_30[1] and close > close_sma_20 and rsi < 40
+stop_hunt_bear = high > highest_high_30[1] and close < close_sma_20 and rsi > 60
+
+// 9. Institutional Candle Patterns
+// Engulfing with Volume
+strong_bull_engulf = bullish_engulfing and volume > volume_sma_20 * 2.5 and body_size > body_sma_10 * 2
+strong_bear_engulf = bearish_engulfing and volume > volume_sma_20 * 2.5 and body_size > body_sma_10 * 2
+
+// 10. Momentum Continuation Patterns
+momentum_bull = close > close[1] and close[1] > close[2] and close[2] > close[3] and rsi > 60 and volume > volume_sma_10
+momentum_bear = close < close[1] and close[1] < close[2] and close[2] < close[3] and rsi < 40 and volume > volume_sma_10
+
+// 11. Support/Resistance Flip Pattern
+sr_flip_bull = close[5] < support_level and close > support_level * 1.005 and volume > volume_sma_20 * 1.5
+sr_flip_bear = close[5] > resistance_level and close < resistance_level * 0.995 and volume > volume_sma_20 * 1.5
+
+// 12. Three White Soldiers / Three Black Crows (Enhanced)
+three_white_soldiers = close > open and close[1] > open[1] and close[2] > open[2] and 
+     close > close[1] and close[1] > close[2] and 
+     volume > volume_sma_10 and low > low[1] * 0.999
+three_black_crows = close < open and close[1] < open[1] and close[2] < open[2] and 
+     close < close[1] and close[1] < close[2] and 
+     volume > volume_sma_10 and high < high[1] * 1.001
+
+// 13. Rejection Patterns at Key Levels
+key_resistance_reject = high >= resistance_level * 0.999 and close < resistance_level * 0.995 and upper_shadow > body_size * 2
+key_support_reject = low <= support_level * 1.001 and close > support_level * 1.005 and lower_shadow > body_size * 2
+
+// Legacy Harmonic Patterns (Simplified but Enhanced)
+ab_swing = high[20] - low[15]
+cd_swing = high[5] - low[0]
+abcd_pattern = math.abs(ab_swing - cd_swing) < atr_14 and ab_swing > atr_14 * 2 and volume > volume_sma_20 * 1.5
+
+three_drives_up = ta.highest(high, 5)[15] < ta.highest(high, 5)[10] and ta.highest(high, 5)[10] < ta.highest(high, 5)[5] and volume > volume_sma_15
+three_drives_down = ta.lowest(low, 5)[15] > ta.lowest(low, 5)[10] and ta.lowest(low, 5)[10] > ta.lowest(low, 5)[5] and volume > volume_sma_15
+
+// Advanced Market Structure Analysis
+// Trend Strength Calculation
+trend_momentum = (ema_fast_line - ema_slow_line) / ema_slow_line
+trend_strength = math.abs(trend_momentum)
+strong_uptrend = close > ema_trend_line and ema_fast_line > ema_slow_line and trend_momentum > trend_strength_min
+strong_downtrend = close < ema_trend_line and ema_fast_line < ema_slow_line and trend_momentum < -trend_strength_min
+
+// Market Structure (Higher Highs/Lower Lows)
+market_structure_bullish = close > highest_high_20[5] and low > lowest_low_10[5] and volume > volume_sma_20 * 1.5
+market_structure_bearish = close < lowest_low_20[5] and high < highest_high_10[5] and volume > volume_sma_20 * 1.5
+
+// Momentum Alignment (Multiple Timeframes)
+short_momentum = (close - close[5]) / close[5] > 0.01  // 5-bar momentum
+medium_momentum = (close - close[20]) / close[20] > 0.02  // 20-bar momentum
+momentum_aligned_bull = short_momentum and medium_momentum and rsi > 55
+momentum_aligned_bear = not short_momentum and not medium_momentum and rsi < 45
+
+// Market Session Analysis (Crypto has peak activity hours)
+hour_utc = hour
+high_activity_session = (hour_utc >= 8 and hour_utc <= 12) or (hour_utc >= 14 and hour_utc <= 18)  // London + NY overlap
+
+uptrend = strong_uptrend and (not market_structure_filter or market_structure_bullish)
+downtrend = strong_downtrend and (not market_structure_filter or market_structure_bearish)
+
+// Advanced Session and Quality Filters
+session_ok = not use_session_filter or (hour >= session_start and hour <= session_end)
+high_activity_ok = not market_hours_filter or high_activity_session
+
+// ADVANCED QUALITY FILTERS WITH ENHANCED VOLUME
+// Multi-tier Volume Requirements
+elite_volume_ok = volume_surge_extreme or volume_explosion  // Institutional-level volume
+strong_volume_ok = volume_surge or volume_thrust or volume_accumulation or volume_distribution
+basic_volume_ok = volume_above_avg and not weak_uptrend_volume and not weak_downtrend_volume
+
+// Primary Volume Filter (Comprehensive)
+min_volume_ok = not min_volume_filter or (
+     (elite_volume_ok) or  // Institutional volume gets priority
+     (strong_volume_ok and trend_strength > 0.03) or  // Strong volume + strong trend
+     (basic_volume_ok and volume > volume_sma_20 * 1.8)  // Basic minimum requirement
+     )
+
+// Volume-Price Harmony (Critical for Crypto Success)
+volume_price_harmony = (uptrend and healthy_uptrend_volume) or (downtrend and healthy_downtrend_volume)
+
+trend_strength_ok = not trend_strength_filter or trend_strength > trend_strength_min
+volatility_ok = not volatility_filter or atr_14 / close > 0.018
+momentum_ok = not momentum_confirmation or (uptrend and momentum_aligned_bull) or (downtrend and momentum_aligned_bear)
+
+// Dynamic Trade Management
+var int last_trade_bar = 0
+var int daily_trade_count = 0
+var int last_trade_day = 0
+
+// Reset daily counter
+if dayofweek != dayofweek[1]
+    daily_trade_count := 0
+    last_trade_day := dayofweek
+
+// Enhanced trade cooldown based on performance
+base_cooldown = 8  // More conservative cooldown
+dynamic_cooldown = trend_strength > 0.04 ? base_cooldown / 2 : base_cooldown  // Reduce cooldown in strong trends
+can_trade = bar_index - last_trade_bar >= dynamic_cooldown and daily_trade_count < max_trades_per_day
+
+// === ENHANCED MULTI-INDICATOR CONFLUENCE SYSTEM ===
+// Technical Indicator Signals (10 points possible)
+long_ema_signal = ema_crossover_signal or (ema_fast_line > ema_slow_line and close > ema_trend_line)
+long_bb_signal = close > bb_upper or (close > bb_basis and close[1] <= bb_basis[1])
+long_rsi_signal = rsi > 50 and rsi < 80
+long_macd_signal = macd_line > macd_signal_line and macd_hist > macd_hist[1]
+long_stoch_signal = stoch_k_line > stoch_d_line and stoch_k_line < 80
+long_williams_signal = williams_r > -80 and williams_r[1] <= williams_r
+long_cci_signal = cci > -100 and cci > cci[1]
+long_ao_signal = ao > 0 or (ao > ao[1] and ao[1] > ao[2])
+long_volume_signal = volume_above_avg or volume_surge
+long_sr_signal = na(support_level) ? false : close > support_level and close < support_level * 1.02
+
+// === PATTERN PRIORITY & NAMING SYSTEM ===
+// Priority Scale: 1=Low, 2=Medium, 3=High, 4=Very High, 5=Elite
+
+// LONG PATTERNS WITH PRIORITIES
+// Elite Institutional Patterns (Priority 5) - Most Reliable
+long_elite_bos = bos_bullish ? 5 : 0  // "BOS-Bull"
+long_elite_ob = bullish_ob ? 5 : 0    // "OrderBlock"
+long_elite_wyckoff = wyckoff_spring ? 5 : 0  // "Wyckoff"
+
+// High Priority Chart Patterns (Priority 4) - Strong Setups
+long_high_triangle = ascending_triangle ? 4 : 0  // "AscTriangle"
+long_high_cup = cup_pattern ? 4 : 0             // "Cup&Handle"
+long_high_double = double_bottom ? 4 : 0        // "DblBottom"
+long_high_h_s = inv_head_shoulders ? 4 : 0      // "InvH&S"
+
+// Medium Priority Patterns (Priority 3) - Good Setups
+long_med_flag = bull_flag ? 3 : 0               // "BullFlag"
+long_med_wedge = falling_wedge ? 3 : 0          // "FallWedge"
+long_med_fib = (fib_bounce_618 or fib_bounce_50) ? 3 : 0  // "Fibonacci"
+long_med_breakout = resistance_break ? 3 : 0    // "ResBreak"
+
+// Lower Priority Patterns (Priority 1-2)
+long_low_candle = (hammer or strong_bull_engulf or morning_star) ? 2 : 0  // "Candle"
+long_low_gap = (gap_up or fvg_up) ? 1 : 0      // "Gap"
+
+// Calculate Weighted Long Score
+long_pattern_weight = long_elite_bos + long_elite_ob + long_elite_wyckoff + 
+                     long_high_triangle + long_high_cup + long_high_double + long_high_h_s +
+                     long_med_flag + long_med_wedge + long_med_fib + long_med_breakout +
+                     long_low_candle + long_low_gap
+
+// Get Active Pattern Names for Long
+long_active_names = ""
+if long_elite_bos > 0
+    long_active_names := long_active_names + "BOS "
+if long_elite_ob > 0
+    long_active_names := long_active_names + "OB "
+if long_elite_wyckoff > 0
+    long_active_names := long_active_names + "WYC "
+if long_high_triangle > 0
+    long_active_names := long_active_names + "TRI "
+if long_high_cup > 0
+    long_active_names := long_active_names + "CUP "
+if long_high_double > 0
+    long_active_names := long_active_names + "DBL "
+if long_med_flag > 0
+    long_active_names := long_active_names + "FLAG "
+if long_med_fib > 0
+    long_active_names := long_active_names + "FIB "
+
+// Legacy calculation for compatibility
+long_candle_pattern = hammer or inverted_hammer or strong_bull_engulf or morning_star or three_white_soldiers
+long_chart_pattern = resistance_break or (higher_high and higher_low) or ascending_triangle or bull_flag or falling_wedge
+long_gap_pattern = gap_up or gap_filled_up or fvg_up
+
+// Institutional Patterns (7 points) 
+long_institutional_bos = bos_bullish or choch_bullish  
+long_institutional_ob = bullish_ob or sr_flip_bull
+long_institutional_div = rsi_bearish_div or macd_bullish_div // Divergence for long (price down, indicator up)
+long_institutional_wyckoff = wyckoff_spring or stop_hunt_bull
+long_institutional_liquidity = sweep_low or key_support_reject
+long_institutional_momentum = momentum_bull or three_white_soldiers
+long_institutional_structure = (close > highest_high_20[1]) and volume > volume_sma_20 * 2
+
+// Advanced Patterns (5 points)
+long_volume_pattern = volume_spike or volume_climax
+long_breakout_pattern = (close > highest_high_20[1]) or (inside_bar[1] and close > high[1]) or channel_breakout_up or rectangle_breakout_up
+long_harmonic_pattern = cup_pattern or inv_head_shoulders or double_bottom or three_drives_down
+long_fibonacci_pattern = fib_bounce_618 or fib_bounce_50 or fib_bounce_382
+long_advanced_pattern = abcd_pattern and close > open
+
+// Technical Indicator Signals (10 points possible)  
+short_ema_signal = ema_crossunder_signal or (ema_fast_line < ema_slow_line and close < ema_trend_line)
+short_bb_signal = close < bb_lower or (close < bb_basis and close[1] >= bb_basis[1])
+short_rsi_signal = rsi < 50 and rsi > 20
+short_macd_signal = macd_line < macd_signal_line and macd_hist < macd_hist[1]
+short_stoch_signal = stoch_k_line < stoch_d_line and stoch_k_line > 20
+short_williams_signal = williams_r < -20 and williams_r[1] >= williams_r
+short_cci_signal = cci < 100 and cci < cci[1]
+short_ao_signal = ao < 0 or (ao < ao[1] and ao[1] < ao[2])
+short_volume_signal = volume_above_avg or volume_surge
+short_sr_signal = na(resistance_level) ? false : close < resistance_level and close > resistance_level * 0.98
+
+// SHORT PATTERNS WITH PRIORITIES
+// Elite Institutional Patterns (Priority 5)
+short_elite_bos = bos_bearish ? 5 : 0     // "BOS-Bear"
+short_elite_ob = bearish_ob ? 5 : 0       // "OrderBlock"
+short_elite_wyckoff = wyckoff_utad ? 5 : 0 // "Wyckoff"
+
+// High Priority Chart Patterns (Priority 4)
+short_high_triangle = descending_triangle ? 4 : 0  // "DescTriangle"
+short_high_double = double_top ? 4 : 0             // "DblTop"
+short_high_h_s = head_shoulders ? 4 : 0            // "H&S"
+short_high_wedge = rising_wedge ? 4 : 0            // "RisWedge"
+
+// Medium Priority Patterns (Priority 3)
+short_med_flag = bear_flag ? 3 : 0                 // "BearFlag"
+short_med_fib = (close < fib_23_6 and close[1] >= fib_23_6) ? 3 : 0  // "Fibonacci"
+short_med_breakdown = support_break ? 3 : 0        // "SupBreak"
+
+// Lower Priority Patterns (Priority 1-2)
+short_low_candle = (shooting_star or strong_bear_engulf or evening_star) ? 2 : 0  // "Candle"
+short_low_gap = (gap_down or fvg_down) ? 1 : 0     // "Gap"
+
+// Calculate Weighted Short Score
+short_pattern_weight = short_elite_bos + short_elite_ob + short_elite_wyckoff + 
+                      short_high_triangle + short_high_double + short_high_h_s + short_high_wedge +
+                      short_med_flag + short_med_fib + short_med_breakdown +
+                      short_low_candle + short_low_gap
+
+// Get Active Pattern Names for Short
+short_active_names = ""
+if short_elite_bos > 0
+    short_active_names := short_active_names + "BOS "
+if short_elite_ob > 0
+    short_active_names := short_active_names + "OB "
+if short_elite_wyckoff > 0
+    short_active_names := short_active_names + "WYC "
+if short_high_triangle > 0
+    short_active_names := short_active_names + "TRI "
+if short_high_double > 0
+    short_active_names := short_active_names + "DBL "
+if short_high_h_s > 0
+    short_active_names := short_active_names + "H&S "
+if short_med_flag > 0
+    short_active_names := short_active_names + "FLAG "
+if short_med_fib > 0
+    short_active_names := short_active_names + "FIB "
+
+// Legacy patterns for compatibility
+short_candle_pattern = shooting_star or hanging_man or strong_bear_engulf or evening_star or three_black_crows
+short_chart_pattern = support_break or (lower_low and lower_high) or descending_triangle or bear_flag or rising_wedge
+short_gap_pattern = gap_down or gap_filled_down or fvg_down
+
+// Institutional Patterns (7 points)
+short_institutional_bos = bos_bearish or choch_bearish
+short_institutional_ob = bearish_ob or sr_flip_bear  
+short_institutional_div = rsi_bullish_div or macd_bearish_div // Divergence for short (price up, indicator down)
+short_institutional_wyckoff = wyckoff_utad or stop_hunt_bear
+short_institutional_liquidity = sweep_high or key_resistance_reject
+short_institutional_momentum = momentum_bear or three_black_crows
+short_institutional_structure = (close < lowest_low_20[1]) and volume > volume_sma_20 * 2
+
+// Advanced Patterns (5 points)
+short_volume_pattern = volume_spike or volume_climax
+short_breakdown_pattern = (close < lowest_low_20[1]) or (inside_bar[1] and close < low[1]) or channel_breakout_down or rectangle_breakout_down
+short_harmonic_pattern = head_shoulders or double_top or three_drives_up
+short_fibonacci_pattern = close < fib_23_6 and close[1] >= fib_23_6
+short_advanced_pattern = abcd_pattern and close < open
+
+// Calculate Enhanced Confluence Scores (25 points total: 10 technical + 15 institutional pattern)
+long_technical_score = (long_ema_signal ? 1 : 0) + (long_bb_signal ? 1 : 0) + (long_rsi_signal ? 1 : 0) + (long_macd_signal ? 1 : 0) + (long_stoch_signal ? 1 : 0) + (long_williams_signal ? 1 : 0) + (long_cci_signal ? 1 : 0) + (long_ao_signal ? 1 : 0) + (long_volume_signal ? 1 : 0) + (long_sr_signal ? 1 : 0)
+
+// Institutional Pattern Scoring (15 points total: 3 basic + 7 institutional + 5 advanced)
+long_basic_patterns = (long_candle_pattern ? 1 : 0) + (long_chart_pattern ? 1 : 0) + (long_gap_pattern ? 1 : 0)
+long_institutional_patterns = (long_institutional_bos ? 1 : 0) + (long_institutional_ob ? 1 : 0) + (long_institutional_div ? 1 : 0) + (long_institutional_wyckoff ? 1 : 0) + (long_institutional_liquidity ? 1 : 0) + (long_institutional_momentum ? 1 : 0) + (long_institutional_structure ? 1 : 0)
+long_advanced_patterns = (long_volume_pattern ? 1 : 0) + (long_breakout_pattern ? 1 : 0) + (long_harmonic_pattern ? 1 : 0) + (long_fibonacci_pattern ? 1 : 0) + (long_advanced_pattern ? 1 : 0)
+
+long_pattern_score = long_basic_patterns + long_institutional_patterns + long_advanced_patterns
+long_confluence = long_technical_score + long_pattern_score
+
+// Short Side Scoring
+short_technical_score = (short_ema_signal ? 1 : 0) + (short_bb_signal ? 1 : 0) + (short_rsi_signal ? 1 : 0) + (short_macd_signal ? 1 : 0) + (short_stoch_signal ? 1 : 0) + (short_williams_signal ? 1 : 0) + (short_cci_signal ? 1 : 0) + (short_ao_signal ? 1 : 0) + (short_volume_signal ? 1 : 0) + (short_sr_signal ? 1 : 0)
+
+short_basic_patterns = (short_candle_pattern ? 1 : 0) + (short_chart_pattern ? 1 : 0) + (short_gap_pattern ? 1 : 0)
+short_institutional_patterns = (short_institutional_bos ? 1 : 0) + (short_institutional_ob ? 1 : 0) + (short_institutional_div ? 1 : 0) + (short_institutional_wyckoff ? 1 : 0) + (short_institutional_liquidity ? 1 : 0) + (short_institutional_momentum ? 1 : 0) + (short_institutional_structure ? 1 : 0)
+short_advanced_patterns = (short_volume_pattern ? 1 : 0) + (short_breakdown_pattern ? 1 : 0) + (short_harmonic_pattern ? 1 : 0) + (short_fibonacci_pattern ? 1 : 0) + (short_advanced_pattern ? 1 : 0)
+
+short_pattern_score = short_basic_patterns + short_institutional_patterns + short_advanced_patterns
+short_confluence = short_technical_score + short_pattern_score
+
+// Final Entry Conditions with Enhanced Filters
+// Institutional Pattern Requirements
+has_institutional_long = long_institutional_patterns >= 1  // At least 1 institutional pattern
+has_institutional_short = short_institutional_patterns >= 1  // At least 1 institutional pattern
+
+// Pattern Boost Logic (More Selective)
+pattern_boost_long = pattern_boost and long_institutional_patterns >= 2  // At least 2 institutional patterns
+pattern_boost_short = pattern_boost and short_institutional_patterns >= 2  // At least 2 institutional patterns
+
+// Multi-layered Filtering (Relaxed for more signals)
+strong_trend_long = uptrend and (ema_fast_line - ema_slow_line) / ema_slow_line > 0.015 // Relaxed trend requirement
+strong_trend_short = downtrend and (ema_slow_line - ema_fast_line) / ema_fast_line > 0.015 // Relaxed trend requirement
+
+// Reduce threshold if strong institutional patterns are present
+effective_long_threshold = pattern_boost_long ? confluence_threshold - 1 : confluence_threshold
+effective_short_threshold = pattern_boost_short ? confluence_threshold - 1 : confluence_threshold
+
+// ELITE Entry Conditions (Quality Over Quantity)
+// Require multiple institutional patterns for highest probability
+elite_long_patterns = long_institutional_patterns >= 2 and long_pattern_weight >= 8  // At least 2 institutional + high priority patterns
+elite_short_patterns = short_institutional_patterns >= 2 and short_pattern_weight >= 8
+
+// Advanced confluence requirements
+long_confluence_elite = long_confluence >= effective_long_threshold and long_technical_score >= 6  // Strong technical + pattern confluence
+short_confluence_elite = short_confluence >= effective_short_threshold and short_technical_score >= 6
+
+// Market structure confirmation
+structure_confirmed_long = market_structure_bullish and volume > volume_sma_20 * 2.5  // Strong structure + volume
+structure_confirmed_short = market_structure_bearish and volume > volume_sma_20 * 2.5
+
+// ELITE ENTRY CONDITIONS WITH ADVANCED VOLUME VALIDATION
+// Volume Breakout Validation (Critical for Crypto)
+long_volume_valid = breakout_volume_valid or (elite_volume_ok and healthy_uptrend_volume) or 
+     (volume_accumulation and not false_breakout_likely)
+
+short_volume_valid = breakout_volume_valid or (elite_volume_ok and healthy_downtrend_volume) or 
+     (volume_distribution and not false_breakout_likely)
+
+// Final Elite Entry Conditions (Volume-Centric)
+long_condition = long_confluence_elite and uptrend and session_ok and high_activity_ok and 
+     strategy.position_size == 0 and can_trade and has_institutional_long and 
+     min_volume_ok and long_volume_valid and trend_strength_ok and volatility_ok and momentum_ok and
+     (not pattern_boost or elite_long_patterns) and structure_confirmed_long and volume_price_harmony
+
+short_condition = short_confluence_elite and downtrend and session_ok and high_activity_ok and 
+     strategy.position_size == 0 and can_trade and has_institutional_short and 
+     min_volume_ok and short_volume_valid and trend_strength_ok and volatility_ok and momentum_ok and
+     (not pattern_boost or elite_short_patterns) and structure_confirmed_short and volume_price_harmony
+
+// === ELITE POSITION MANAGEMENT ===
+// Calculate dynamic stops based on market conditions
+dynamic_stop_long = use_dynamic_stops ? stop_loss_pct * (1 + atr_14/close) : stop_loss_pct
+dynamic_stop_short = use_dynamic_stops ? stop_loss_pct * (1 + atr_14/close) : stop_loss_pct
+
+// Elite Entries (Highly Selective)
+if long_condition and can_trade
+    strategy.entry("Long", strategy.long, alert_message="🏆 ELITE LONG: Institutional Grade Setup")
+    last_trade_bar := bar_index
+    daily_trade_count := daily_trade_count + 1
+
+if short_condition and can_trade
+    strategy.entry("Short", strategy.short, alert_message="🎯 ELITE SHORT: Institutional Grade Setup")
+    last_trade_bar := bar_index
+    daily_trade_count := daily_trade_count + 1
+
+// Optimized Exit Conditions
+long_exit_momentum = strategy.position_size > 0 and (rsi > 70 or ema_crossunder_signal)
+short_exit_momentum = strategy.position_size < 0 and (rsi < 30 or ema_crossover_signal)
+
+// Take partial profits on momentum loss
+if long_exit_momentum
+    strategy.close("Long", qty_percent=30, alert_message="📤 LONG MOMENTUM EXIT")
+
+if short_exit_momentum
+    strategy.close("Short", qty_percent=30, alert_message="📤 SHORT MOMENTUM EXIT")
+
+// ADVANCED DYNAMIC RISK MANAGEMENT SYSTEM
+if strategy.position_size > 0
+    // Dynamic stop based on market volatility and structure
+    stop_price = strategy.position_avg_price * (1 - dynamic_stop_long / 100)
+    tp1_price = strategy.position_avg_price * (1 + take_profit_1_pct / 100)
+    tp2_price = strategy.position_avg_price * (1 + take_profit_2_pct / 100) 
+    tp3_price = strategy.position_avg_price * (1 + take_profit_3_pct / 100)
+    
+    // Enhanced Risk:Reward validation
+    risk_amount = strategy.position_avg_price - stop_price
+    reward_1 = tp1_price - strategy.position_avg_price
+    reward_2 = tp2_price - strategy.position_avg_price
+    
+    // Only take trades with proper R:R and elite patterns
+    if reward_1 / risk_amount >= risk_reward_min and elite_long_patterns
+        // Aggressive profit-taking for elite setups
+        strategy.exit("Long TP1", "Long", stop=stop_price, limit=tp1_price, qty_percent=50, comment="Elite TP1")
+        strategy.exit("Long TP2", "Long", stop=stop_price, limit=tp2_price, qty_percent=35, comment="Elite TP2") 
+        strategy.exit("Long TP3", "Long", stop=stop_price, limit=tp3_price, qty_percent=15, comment="Elite Runner")
+
+if strategy.position_size < 0
+    // Dynamic stop based on market volatility and structure  
+    stop_price = strategy.position_avg_price * (1 + dynamic_stop_short / 100)
+    tp1_price = strategy.position_avg_price * (1 - take_profit_1_pct / 100)
+    tp2_price = strategy.position_avg_price * (1 - take_profit_2_pct / 100)
+    tp3_price = strategy.position_avg_price * (1 - take_profit_3_pct / 100)
+    
+    // Enhanced Risk:Reward validation
+    risk_amount = stop_price - strategy.position_avg_price
+    reward_1 = strategy.position_avg_price - tp1_price
+    reward_2 = strategy.position_avg_price - tp2_price
+    
+    // Only take trades with proper R:R and elite patterns
+    if reward_1 / risk_amount >= risk_reward_min and elite_short_patterns
+        // Aggressive profit-taking for elite setups
+        strategy.exit("Short TP1", "Short", stop=stop_price, limit=tp1_price, qty_percent=50, comment="Elite TP1")
+        strategy.exit("Short TP2", "Short", stop=stop_price, limit=tp2_price, qty_percent=35, comment="Elite TP2")
+        strategy.exit("Short TP3", "Short", stop=stop_price, limit=tp3_price, qty_percent=15, comment="Elite Runner")
+
+// === CLEAN VISUAL INTERFACE ===
+// Only Essential Lines - Reduced Visual Clutter
+show_emas = input.bool(false, title="Show EMAs", group="Display")
+show_bb = input.bool(false, title="Show Bollinger Bands", group="Display") 
+show_sr_levels = input.bool(true, title="Show Support/Resistance", group="Display")
+
+// EMAs (Optional - Hidden by default for cleaner chart)
+plot(show_emas ? ema_fast_line : na, color=color.new(color.blue, 30), linewidth=1, title="Fast EMA")
+plot(show_emas ? ema_trend_line : na, color=color.new(color.gray, 50), linewidth=1, title="Trend EMA")
+
+// Support/Resistance Levels (Clean and Minimal)
+plot(show_sr_levels and not na(resistance_level) ? resistance_level : na, color=color.new(color.red, 0), linewidth=2, style=plot.style_line, title="Resistance")
+plot(show_sr_levels and not na(support_level) ? support_level : na, color=color.new(color.green, 0), linewidth=2, style=plot.style_line, title="Support")
+
+// CLEAN ENTRY SIGNALS (Minimal Visual Clutter)
+show_entry_labels = input.bool(true, title="Show Entry Labels", group="Display")
+
+// Only show elite entries to reduce noise
+if long_condition and show_entry_labels
+    label.new(bar_index, low - atr_14 * 0.5, text="🏆", color=color.new(color.lime, 0), textcolor=color.white, 
+              size=size.normal, style=label.style_label_up, 
+              tooltip="ELITE LONG\nScore: " + str.tostring(long_confluence) + "/25\nPatterns: " + long_active_names)
+
+if short_condition and show_entry_labels  
+    label.new(bar_index, high + atr_14 * 0.5, text="🎯", color=color.new(color.red, 0), textcolor=color.white, 
+              size=size.normal, style=label.style_label_down,
+              tooltip="ELITE SHORT\nScore: " + str.tostring(short_confluence) + "/25\nPatterns: " + short_active_names)
+
+// Minimal position background (optional)
+show_position_bg = input.bool(false, title="Show Position Background", group="Display")
+pos_bg = show_position_bg and strategy.position_size > 0 ? color.new(color.green, 98) : 
+         show_position_bg and strategy.position_size < 0 ? color.new(color.red, 98) : na
+bgcolor(pos_bg)
+
+// === ELITE PERFORMANCE DASHBOARD ===
+if barstate.islast
+    var perf_table = table.new(position.bottom_right, 2, 9, bgcolor=color.new(color.black, 90), border_width=2)
+    
+    // Headers
+    table.cell(perf_table, 0, 0, "🏆 ELITE", text_color=color.white, bgcolor=color.new(color.purple, 20))
+    table.cell(perf_table, 1, 0, "STATUS", text_color=color.white, bgcolor=color.new(color.purple, 20))
+    
+    // Position
+    table.cell(perf_table, 0, 1, "Position", text_color=color.white)
+    pos_text = strategy.position_size == 0 ? "FLAT" : strategy.position_size > 0 ? "LONG" : "SHORT"
+    pos_color = strategy.position_size == 0 ? color.gray : strategy.position_size > 0 ? color.green : color.red
+    table.cell(perf_table, 1, 1, pos_text, text_color=color.white, bgcolor=pos_color)
+    
+    // Long Score
+    table.cell(perf_table, 0, 2, "🟢 Long", text_color=color.lime)
+    long_ready = long_confluence >= effective_long_threshold and (not institutional_filter or has_institutional_long)
+    table.cell(perf_table, 1, 2, str.tostring(long_confluence), text_color=color.white, bgcolor=long_ready ? color.green : color.gray)
+    
+    // Short Score
+    table.cell(perf_table, 0, 3, "🔴 Short", text_color=color.red)
+    short_ready = short_confluence >= effective_short_threshold and (not institutional_filter or has_institutional_short)
+    table.cell(perf_table, 1, 3, str.tostring(short_confluence), text_color=color.white, bgcolor=short_ready ? color.red : color.gray)
+    
+    // Patterns with Names
+    table.cell(perf_table, 0, 4, "📈 Patterns", text_color=color.white)
+    
+    // Show highest priority pattern names
+    if long_pattern_weight > short_pattern_weight and long_active_names != ""
+        pattern_display = str.length(long_active_names) > 8 ? str.substring(long_active_names, 0, 8) : long_active_names
+        table.cell(perf_table, 1, 4, pattern_display, text_color=color.white, bgcolor=color.green)
+    else if short_pattern_weight > long_pattern_weight and short_active_names != ""
+        pattern_display = str.length(short_active_names) > 8 ? str.substring(short_active_names, 0, 8) : short_active_names
+        table.cell(perf_table, 1, 4, pattern_display, text_color=color.white, bgcolor=color.red)
+    else
+        total_long = long_basic_patterns + long_institutional_patterns + long_advanced_patterns
+        total_short = short_basic_patterns + short_institutional_patterns + short_advanced_patterns
+        table.cell(perf_table, 1, 4, str.tostring(total_long) + "/" + str.tostring(total_short), text_color=color.white, bgcolor=color.gray)
+    
+    // Market Structure
+    table.cell(perf_table, 0, 5, "🏗️ Structure", text_color=color.white)
+    structure_status = market_structure_bullish ? "BULL" : market_structure_bearish ? "BEAR" : "RANGE"
+    structure_color = market_structure_bullish ? color.green : market_structure_bearish ? color.red : color.gray
+    table.cell(perf_table, 1, 5, structure_status, text_color=color.white, bgcolor=structure_color)
+    
+    // Volume Analysis Display
+    table.cell(perf_table, 0, 6, "� Volume", text_color=color.white)
+    volume_status = elite_volume_ok ? "🔥ELITE" : strong_volume_ok ? "💪STRONG" : volume_above_avg ? "✅OK" : "⚠️LOW"
+    volume_color = elite_volume_ok ? color.new(color.orange, 0) : strong_volume_ok ? color.green : volume_above_avg ? color.gray : color.red
+    table.cell(perf_table, 1, 6, volume_status, text_color=color.white, bgcolor=volume_color)
+    
+    // Advanced Market Prediction Algorithm
+    table.cell(perf_table, 0, 7, "🔮 Predict", text_color=color.white)
+    
+    // Multi-factor prediction score
+    confluence_score = (long_confluence - short_confluence) * 0.3  // 30% weight
+    momentum_score = momentum_aligned_bull ? 2 : momentum_aligned_bear ? -2 : 0  // 20% weight  
+    structure_score = market_structure_bullish ? 2 : market_structure_bearish ? -2 : 0  // 20% weight
+    trend_score = strong_uptrend ? 2 : strong_downtrend ? -2 : 0  // 20% weight
+    // Enhanced Volume Scoring (20% weight - increased importance)
+    volume_score = elite_volume_ok ? 3 : strong_volume_ok ? 2 : volume_surge_mild ? 1 : 
+                   weak_uptrend_volume or weak_downtrend_volume ? -2 : 
+                   volume < volume_avg * 0.7 ? -1 : 0
+    
+    // Volume-Price Harmony Bonus
+    harmony_bonus = volume_price_harmony ? 1 : false_breakout_likely ? -2 : 0
+    
+    prediction_score = confluence_score + momentum_score + structure_score + trend_score + volume_score + harmony_bonus
+    
+    if prediction_score >= 4
+        table.cell(perf_table, 1, 7, "🚀BULL", text_color=color.white, bgcolor=color.new(color.green, 0))
+    else if prediction_score >= 2
+        table.cell(perf_table, 1, 7, "↗️LONG", text_color=color.white, bgcolor=color.green)
+    else if prediction_score <= -4
+        table.cell(perf_table, 1, 7, "🔻BEAR", text_color=color.white, bgcolor=color.new(color.red, 0))
+    else if prediction_score <= -2
+        table.cell(perf_table, 1, 7, "↘️SHORT", text_color=color.white, bgcolor=color.red)
+    else
+        table.cell(perf_table, 1, 7, "➡️FLAT", text_color=color.white, bgcolor=color.gray)
+    
+    // Dynamic Price Target Calculation
+    table.cell(perf_table, 0, 8, "🎯 Target", text_color=color.white)
+    atr_safe = na(atr_14) ? close * 0.02 : atr_14
+    
+    // Calculate targets based on prediction strength and market structure
+    if prediction_score >= 4 and not na(resistance_level)
+        target_price = math.min(close + atr_safe * 3, resistance_level * 0.99)
+        table.cell(perf_table, 1, 8, str.tostring(target_price, "#.##"), text_color=color.white, bgcolor=color.new(color.green, 0))
+    else if prediction_score >= 2
+        target_price = close + atr_safe * 1.8
+        table.cell(perf_table, 1, 8, str.tostring(target_price, "#.##"), text_color=color.white, bgcolor=color.green)
+    else if prediction_score <= -4 and not na(support_level)
+        target_price = math.max(close - atr_safe * 3, support_level * 1.01)
+        table.cell(perf_table, 1, 8, str.tostring(target_price, "#.##"), text_color=color.white, bgcolor=color.new(color.red, 0))
+    else if prediction_score <= -2
+        target_price = close - atr_safe * 1.8
+        table.cell(perf_table, 1, 8, str.tostring(target_price, "#.##"), text_color=color.white, bgcolor=color.red)
+    else
+        table.cell(perf_table, 1, 8, "WAIT", text_color=color.white, bgcolor=color.gray)
+
+// === ALERTS REMOVED ===
+// Use strategy alert_message for notifications instead of alertcondition

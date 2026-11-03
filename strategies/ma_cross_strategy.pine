@@ -1,0 +1,139 @@
+//@version=5
+strategy("Advanced Crypto Winner Strategy", shorttitle="CryptoWin", overlay=true, 
+         default_qty_type=strategy.percent_of_equity, default_qty_value=20, 
+         commission_type=strategy.commission.percent, commission_value=0.1)
+
+// === INPUT PARAMETERS ===
+// Moving Average Settings
+ma_type = input.string("EMA", title="MA Type", options=["SMA", "EMA", "WMA", "VWMA"])
+fast_length = input.int(12, title="Fast MA Length", minval=5, maxval=50)
+slow_length = input.int(26, title="Slow MA Length", minval=10, maxval=100)
+
+// RSI Filter
+use_rsi_filter = input.bool(true, title="Use RSI Filter")
+rsi_length = input.int(14, title="RSI Length", minval=5, maxval=30)
+rsi_overbought = input.int(70, title="RSI Overbought", minval=60, maxval=90)
+rsi_oversold = input.int(30, title="RSI Oversold", minval=10, maxval=40)
+
+// Volume Filter
+use_volume_filter = input.bool(true, title="Use Volume Filter")
+volume_ma_length = input.int(20, title="Volume MA Length", minval=10, maxval=50)
+volume_multiplier = input.float(1.5, title="Volume Multiplier", minval=1.0, maxval=3.0)
+
+// Risk Management
+stop_loss_pct = input.float(3.0, title="Stop Loss %", minval=1.0, maxval=10.0)
+take_profit_pct = input.float(6.0, title="Take Profit %", minval=2.0, maxval=20.0)
+trailing_stop_pct = input.float(2.0, title="Trailing Stop %", minval=1.0, maxval=5.0)
+
+// Time Filter
+use_time_filter = input.bool(true, title="Use Time Filter")
+start_hour = input.int(0, title="Start Hour (UTC)", minval=0, maxval=23)
+end_hour = input.int(23, title="End Hour (UTC)", minval=0, maxval=23)
+
+// === HELPER FUNCTIONS ===
+get_ma(src, length, ma_type) =>
+    switch ma_type
+        "SMA" => ta.sma(src, length)
+        "EMA" => ta.ema(src, length)
+        "WMA" => ta.wma(src, length)
+        "VWMA" => ta.vwma(src, length)
+        => ta.ema(src, length)
+
+// === CALCULATIONS ===
+// Moving Averages
+fast_ma = get_ma(close, fast_length, ma_type)
+slow_ma = get_ma(close, slow_length, ma_type)
+
+// RSI
+rsi = ta.rsi(close, rsi_length)
+
+// Volume
+volume_ma = ta.sma(volume, volume_ma_length)
+high_volume = volume > volume_ma * volume_multiplier
+
+// Time Filter
+time_ok = not use_time_filter or (hour >= start_hour and hour <= end_hour)
+
+// === SIGNAL CONDITIONS ===
+// Basic MA Cross
+ma_cross_up = ta.crossover(fast_ma, slow_ma)
+ma_cross_down = ta.crossunder(fast_ma, slow_ma)
+
+// Additional Filters
+rsi_bullish = not use_rsi_filter or (rsi > rsi_oversold and rsi < rsi_overbought)
+rsi_bearish = not use_rsi_filter or (rsi < rsi_overbought and rsi > rsi_oversold)
+volume_ok = not use_volume_filter or high_volume
+
+// Trend Confirmation (Price above/below both MAs)
+uptrend_confirmed = close > fast_ma and close > slow_ma and fast_ma > slow_ma
+downtrend_confirmed = close < fast_ma and close < slow_ma and fast_ma < slow_ma
+
+// === ENTRY CONDITIONS ===
+long_condition = ma_cross_up and rsi_bullish and volume_ok and time_ok and uptrend_confirmed
+short_condition = ma_cross_down and rsi_bearish and volume_ok and time_ok and downtrend_confirmed
+
+// === POSITION MANAGEMENT ===
+// Entry
+if long_condition and strategy.position_size == 0
+    strategy.entry("Long", strategy.long, alert_message="🚀 CRYPTO LONG ENTRY")
+
+if short_condition and strategy.position_size == 0
+    strategy.entry("Short", strategy.short, alert_message="🔻 CRYPTO SHORT ENTRY")
+
+// Exit Conditions
+long_exit = strategy.position_size > 0 and (ta.crossunder(fast_ma, slow_ma) or rsi > rsi_overbought)
+short_exit = strategy.position_size < 0 and (ta.crossover(fast_ma, slow_ma) or rsi < rsi_oversold)
+
+if long_exit
+    strategy.close("Long", alert_message="📤 LONG EXIT")
+
+if short_exit  
+    strategy.close("Short", alert_message="📤 SHORT EXIT")
+
+// Stop Loss and Take Profit
+if strategy.position_size > 0
+    stop_price = strategy.position_avg_price * (1 - stop_loss_pct / 100)
+    take_price = strategy.position_avg_price * (1 + take_profit_pct / 100)
+    strategy.exit("Long SL/TP", from_entry="Long", stop=stop_price, limit=take_price)
+
+if strategy.position_size < 0
+    stop_price = strategy.position_avg_price * (1 + stop_loss_pct / 100)  
+    take_price = strategy.position_avg_price * (1 - take_profit_pct / 100)
+    strategy.exit("Short SL/TP", from_entry="Short", stop=stop_price, limit=take_price)
+
+// === PLOTTING ===
+// Moving Averages
+plot(fast_ma, color=color.new(color.blue, 0), linewidth=2, title="Fast MA")
+plot(slow_ma, color=color.new(color.red, 0), linewidth=2, title="Slow MA")
+
+// MA Cross Signals
+plotshape(long_condition, style=shape.triangleup, location=location.belowbar, color=color.new(color.lime, 0), size=size.normal, title="Long Signal")
+plotshape(short_condition, style=shape.triangledown, location=location.abovebar, color=color.new(color.red, 0), size=size.normal, title="Short Signal")
+
+// Background Colors
+pos_bg_color = strategy.position_size > 0 ? color.new(color.green, 95) : strategy.position_size < 0 ? color.new(color.red, 95) : na
+bgcolor(pos_bg_color, title="Position")
+
+// === ALERTS ===
+alertcondition(long_condition, title="Long Entry Alert", message="🚀 CRYPTO LONG: {{ticker}} at {{close}} | All filters confirmed - RSI bullish")
+alertcondition(short_condition, title="Short Entry Alert", message="🔻 CRYPTO SHORT: {{ticker}} at {{close}} | All filters confirmed - RSI bearish")
+
+// === TABLE INFO ===
+if barstate.islast and strategy.position_size != 0
+    var info_table = table.new(position.top_right, 2, 5, bgcolor=color.white, border_width=1)
+    table.cell(info_table, 0, 0, "Position", text_color=color.black, bgcolor=color.gray)
+    pos_color = strategy.position_size > 0 ? color.green : color.red
+    pos_text = strategy.position_size > 0 ? "LONG" : "SHORT"
+    table.cell(info_table, 1, 0, pos_text, text_color=color.white, bgcolor=pos_color)
+    table.cell(info_table, 0, 1, "Entry Price", text_color=color.black)
+    table.cell(info_table, 1, 1, str.tostring(strategy.position_avg_price, "#.####"), text_color=color.black)
+    table.cell(info_table, 0, 2, "Current P&L", text_color=color.black)
+    pnl_pct = (close - strategy.position_avg_price) / strategy.position_avg_price * 100 * math.sign(strategy.position_size)
+    pnl_color = pnl_pct > 0 ? color.green : color.red
+    table.cell(info_table, 1, 2, str.tostring(pnl_pct, "#.##") + "%", text_color=pnl_color)
+    table.cell(info_table, 0, 3, "RSI", text_color=color.black)
+    table.cell(info_table, 1, 3, str.tostring(rsi, "#.#"), text_color=color.black)
+    table.cell(info_table, 0, 4, "Volume", text_color=color.black)
+    vol_color = high_volume ? color.orange : color.black
+    vol_text = high_volume ? "HIGH" : "NORMAL"
+    table.cell(info_table, 1, 4, vol_text, text_color=vol_color)

@@ -1,0 +1,20 @@
+//@version=5
+indicator("Multi-Timeframe MA", shorttitle="MTF MA", overlay=true)
+
+// Input parameters
+ma_length = input.int(20, title="MA Length", minval=1)
+higher_tf = input.timeframe("1D", title="Higher Timeframe")
+
+// Get data from higher timeframe
+htf_close = request.security(syminfo.tickerid, higher_tf, close, lookahead=barmerge.lookahead_off)
+htf_ma = request.security(syminfo.tickerid, higher_tf, ta.sma(close, ma_length), lookahead=barmerge.lookahead_off)
+
+// Current timeframe MA
+current_ma = ta.sma(close, ma_length)
+
+// Plot both MAs
+plot(current_ma, color=color.blue, title="Current TF MA", linewidth=1)
+plot(htf_ma, color=color.red, title="Higher TF MA", linewidth=2)
+
+// Add background color when price is above/below HTF MA
+bgcolor(close > htf_ma ? color.new(color.green, 95) : color.new(color.red, 95))

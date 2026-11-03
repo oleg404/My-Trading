@@ -1,0 +1,28 @@
+//@version=5
+indicator("Bollinger Bands", shorttitle="BB", overlay=true)
+
+// Input parameters
+length = input.int(20, title="Length", minval=1)
+src = input(close, title="Source")
+mult = input.float(2.0, title="StdDev", minval=0.001, maxval=50)
+
+// Calculate Bollinger Bands
+basis = ta.sma(src, length)
+dev = mult * ta.stdev(src, length)
+upper = basis + dev
+lower = basis - dev
+
+// Offset for plotting
+offset = input.int(0, title="Offset", minval=-500, maxval=500)
+
+// Plot the bands
+plot(basis, "Basis", color=color.blue, offset=offset)
+p1 = plot(upper, "Upper", color=color.red, offset=offset)
+p2 = plot(lower, "Lower", color=color.green, offset=offset)
+
+// Fill the area between bands
+fill(p1, p2, title="Background", color=color.new(color.gray, 95))
+
+// Alerts
+alertcondition(ta.crossover(close, upper), title="Price Above Upper Band")
+alertcondition(ta.crossunder(close, lower), title="Price Below Lower Band")

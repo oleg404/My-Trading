@@ -1,0 +1,13 @@
+//@version=5
+indicator("Hello World", overlay=true)
+
+// This is a basic Pine Script example
+// It demonstrates the minimal structure needed for a Pine Script
+
+// Simple plot of closing price
+plot(close, color=color.blue, title="Close Price", linewidth=2)
+
+// Add a text label
+if barstate.islast
+    label.new(bar_index, close, text="Hello World!", style=label.style_label_down, 
+              color=color.yellow, textcolor=color.black, size=size.normal)

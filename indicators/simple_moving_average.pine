@@ -1,0 +1,16 @@
+//@version=5
+indicator("Simple Moving Average", shorttitle="SMA", overlay=true)
+
+// Input parameters
+length = input.int(20, title="Length", minval=1)
+source = input(close, title="Source")
+
+// Calculate SMA
+sma_value = ta.sma(source, length)
+
+// Plot the SMA
+plot(sma_value, color=color.blue, linewidth=2, title="SMA")
+
+// Optional: Add alerts
+alertcondition(ta.crossover(close, sma_value), title="Price Crosses Above SMA")
+alertcondition(ta.crossunder(close, sma_value), title="Price Crosses Below SMA")

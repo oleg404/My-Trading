@@ -1,0 +1,26 @@
+//@version=5
+indicator("RSI with Divergence", shorttitle="RSI Div", overlay=false)
+
+// Input parameters
+rsi_length = input.int(14, title="RSI Length", minval=1)
+overbought = input.int(70, title="Overbought Level")
+oversold = input.int(30, title="Oversold Level")
+
+// Calculate RSI
+rsi = ta.rsi(close, rsi_length)
+
+// Plot RSI
+plot(rsi, color=color.purple, linewidth=2, title="RSI")
+
+// Overbought and oversold levels
+hline(overbought, "Overbought", color=color.red, linestyle=hline.style_dashed)
+hline(oversold, "Oversold", color=color.green, linestyle=hline.style_dashed)
+hline(50, "Midline", color=color.gray, linestyle=hline.style_dotted)
+
+// Color the RSI line based on levels
+rsi_color = rsi > overbought ? color.red : rsi < oversold ? color.green : color.purple
+plot(rsi, color=rsi_color, linewidth=2, title="RSI Colored")
+
+// Alerts
+alertcondition(ta.crossover(rsi, overbought), title="RSI Overbought")
+alertcondition(ta.crossunder(rsi, oversold), title="RSI Oversold")

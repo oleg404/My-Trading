@@ -1,0 +1,38 @@
+//@version=5
+strategy("Template Strategy", overlay=true, default_qty_type=strategy.percent_of_equity, default_qty_value=100)
+
+// Input parameters
+// Add your input parameters here
+// Example: length = input.int(20, title="Length", minval=1)
+
+// Variables and calculations
+// Add your calculations here
+// Example: ma = ta.sma(close, length)
+
+// Entry conditions
+// Define your entry conditions here
+// long_condition = your_condition_here
+// short_condition = your_condition_here
+
+// Exit conditions (optional)
+// Define your exit conditions here
+// long_exit = your_exit_condition_here  
+// short_exit = your_exit_condition_here
+
+// Execute trades
+// Uncomment and modify these lines based on your strategy
+// if long_condition
+//     strategy.entry("Long", strategy.long)
+// 
+// if short_condition
+//     strategy.entry("Short", strategy.short)
+
+// Optional: Exit trades
+// if long_exit
+//     strategy.close("Long")
+// 
+// if short_exit
+//     strategy.close("Short")
+
+// Optional: Plotting
+// plot(ma, color=color.blue, title="MA")

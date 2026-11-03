@@ -1,0 +1,20 @@
+//@version=5
+indicator("Template Indicator", shorttitle="TEMP", overlay=false)
+
+// Input parameters
+// Add your input parameters here
+// Example: length = input.int(14, title="Length", minval=1)
+
+// Variables and calculations
+// Add your calculations here
+// Example: value = ta.sma(close, length)
+
+// Plotting
+// Add your plots here
+// Example: plot(value, color=color.blue, title="Value")
+
+// Optional: Horizontal lines
+// hline(0, "Zero Line", color=color.gray)
+
+// Optional: Alerts
+// alertcondition(condition, title="Alert Name")
