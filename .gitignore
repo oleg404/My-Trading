@@ -1,1 +1,7 @@
 .DS_Store
+
+# Kronos research (local venv, cloned upstream repo, generated forecasts)
+research/.venv/
+research/kronos/
+research/output/
+__pycache__/

@@ -114,6 +114,33 @@ bgcolor(color)               // Background color
 4. **Check Multiple Timeframes**: Test across different timeframes
 5. **Validate Alerts**: Ensure alerts fire correctly
 
+## Kronos Forecasting (Python research)
+
+`research/` holds an offline forecasting setup using [Kronos](https://github.com/shiyu-coder/Kronos), an open source foundation model for candlestick data.
+It does not run inside TradingView. Use it to sanity-check strategy signals against sampled future price paths.
+
+### Setup (one time)
+
+```bash
+cd research
+git clone --depth 1 https://github.com/shiyu-coder/Kronos.git kronos
+uv venv --python 3.12 .venv
+uv pip install --python .venv/bin/python -r kronos/requirements.txt ccxt
+```
+
+### Run a forecast
+
+```bash
+cd research
+.venv/bin/python kronos_forecast.py --symbol BTC/USDT --timeframe 1h --pred-len 24 --samples 10 --plot
+```
+
+Options: `--model mini|small|base`, `--lookback`, `--exchange binance|bybit|okx|kraken`, `--temperature`, `--top-p`.
+Candles come from public exchange endpoints, so no API keys are needed.
+Results are written to `research/output/`.
+
+Forecasts are sampled, so each run differs. Treat the share of paths ending up or down as a rough probability, not a trade signal.
+
 ## Contributing
 
 When adding new scripts:
