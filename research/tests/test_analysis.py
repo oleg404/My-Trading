@@ -101,6 +101,9 @@ class VerdictTest(unittest.TestCase):
         self.assertEqual(analysis.combine(k, k, 0.8)["action"], "PAPER TRADE")
         self.assertEqual(analysis.combine(k, None, 0.8)["action"], "PAPER ONLY")
         self.assertEqual(analysis.combine(k, k, 0.4)["action"], "SKIP")
+        unchecked = analysis.combine(k, None, None)
+        self.assertEqual(unchecked["action"], "PAPER ONLY")
+        self.assertIn("Kronos was not checked against recent days.", unchecked["reasons"])
 
 
 class DataTest(unittest.TestCase):

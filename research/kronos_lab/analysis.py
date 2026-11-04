@@ -146,6 +146,8 @@ def combine(kronos: dict, timemachine: dict | None, calib_share) -> dict:
     _, cal_cls = calibration_label(calib_share)
     if cal_cls == "bad":
         reasons.append("Kronos failed its calibration check on this ticker.")
+    elif calib_share is None:
+        reasons.append("Kronos was not checked against recent days.")
     if timemachine is None:
         reasons.append("No Time Machine second opinion for this plan.")
         if k_lean >= COIN_FLIP and cal_cls != "bad":
