@@ -141,6 +141,28 @@ Results are written to `research/output/`.
 
 Forecasts are sampled, so each run differs. Treat the share of paths ending up or down as a rough probability, not a trade signal.
 
+### Kronos + Day Trader scan (the dashboard's Kronos tab)
+
+`research/kronos_trade.py scan` runs the whole check in one go and writes one JSON result:
+
+1. Samples 1,000 Kronos futures from the last 128 candles, 48 candles ahead, and keeps every path in a `.npz`.
+2. Picks the side from the fan (short when most paths end down) unless you choose one, with a 1 % stop and a 2 % target by default.
+3. Races every path to the stop and the target. A candle that touches both counts as the stop.
+4. Re-runs Kronos as of each of the last 5 days and counts how often the real close landed inside the p10 to p90 band. About 80 % is well calibrated.
+5. Asks the Day Trader Time Machine for a second opinion, but only between 9:35 AM and 3:55 PM New York time.
+6. Says PAPER TRADE only when Kronos and the Time Machine both lean toward the target and the band passed its check. Otherwise it says SKIP or PAPER ONLY.
+
+```bash
+cd research
+.venv/bin/python kronos_trade.py scan --symbol BTC-USD --out output/btc.json
+```
+
+Symbols are Yahoo tickers (`BTC-USD`, `ETH-USD`, `TSLA`) or ccxt pairs (`BTC/USDT`).
+On an Apple Silicon Mac a full scan takes about 7 minutes.
+Tests run offline: `.venv/bin/python -m unittest discover -s tests -v`.
+
+The TradingAgents desk (`scripts/dashboard.sh`, http://127.0.0.1:8787) has a **Kronos** tab that runs this scan, draws the fan, the race and the calibration, and can record the plan in the desk's paper portfolio after you confirm. It never sends an order to a broker.
+
 ## Contributing
 
 When adding new scripts:

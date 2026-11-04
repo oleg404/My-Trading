@@ -166,3 +166,20 @@ def _into_session(t: pd.Timestamp, timeframe: str) -> pd.Timestamp:
     while nxt.weekday() >= 5:
         nxt += timedelta(days=1)
     return nxt
+
+
+CRYPTO_SUFFIXES = ("-USD", "-USDT", "-USDC", "-BTC", "-ETH", "-EUR")
+
+
+def is_crypto(symbol: str) -> bool:
+    """A ccxt pair, or a Yahoo coin ticker such as BTC-USD. Coins trade around the clock."""
+    return is_pair(symbol) or symbol.upper().endswith(CRYPTO_SUFFIXES)
+
+
+def bars_per_day(symbol: str, timeframe: str) -> int:
+    """Bars in one trading day: 24 hours for coins, 9:30 to 16:00 for stocks."""
+    step = step_of(timeframe)
+    if step >= timedelta(days=1):
+        return 1
+    minutes = 24 * 60 if is_crypto(symbol) else 390
+    return max(1, int(round(minutes / (step.total_seconds() / 60))))
