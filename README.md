@@ -163,6 +163,23 @@ Tests run offline: `.venv/bin/python -m unittest discover -s tests -v`.
 
 The TradingAgents desk (`scripts/dashboard.sh`, http://127.0.0.1:8787) has a **Kronos** tab that runs this scan, draws the fan, the race and the calibration, and can record the plan in the desk's paper portfolio after you confirm. It never sends an order to a broker.
 
+## Claude connector for the desk (MCP)
+
+`src/desk_mcp/server.py` lets Claude Desktop and Claude Code use the local TradingAgents desk (http://127.0.0.1:8787) in conversation.
+It talks only to the desk's own API on this Mac, so the desk's rules (asset rules, cash and margin checks) apply to everything, and every trade is a paper entry.
+
+Tools: `list_portfolios`, `get_portfolio`, `switch_portfolio`, `create_portfolio`, `get_prediction` (the agents + Kronos combined call), `get_history`, `run_analysis`, `get_activity`, `get_daily_check`, `get_watchlist` and `record_paper_trade`.
+`record_paper_trade` first returns a ticket and records only when called again with `confirm=true`, after you say yes. New positions default to 10% of the chosen portfolio's equity.
+
+Register it (already done on this Mac):
+
+```bash
+claude mcp add --scope user trading-desk -- /opt/homebrew/bin/uv run --quiet --script /Users/olegshuster/My-Trading/src/desk_mcp/server.py
+```
+
+For Claude Desktop, the same command and arguments go under `mcpServers` in `~/Library/Application Support/Claude/claude_desktop_config.json`, followed by a restart of the app.
+The desk must be running (`scripts/dashboard.sh`). Tests: `python3 -m unittest discover -s tests -p 'test_desk_mcp*.py'`.
+
 ## Contributing
 
 When adding new scripts:
