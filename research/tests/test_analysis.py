@@ -134,3 +134,38 @@ class DataTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ReversionTest(unittest.TestCase):
+    """The window pull: a last close far below the window's average gets a fan that climbs back."""
+
+    def test_context_places_the_last_close(self):
+        ctx = analysis.context(np.linspace(110, 100, 128), 100.0)
+        self.assertLess(ctx["z"], -1.5)
+        self.assertEqual(ctx["pos"], 0.0)
+        self.assertEqual(ctx["bars"], 128)
+
+    def test_side_that_follows_the_pull_is_flagged(self):
+        ctx = analysis.context(np.linspace(110, 100, 128), 100.0)
+        fan = {"n": 300, "up": 300, "down": 0}
+        self.assertTrue(analysis.reversion(ctx, fan, "long")["flagged"])
+        against = analysis.reversion(ctx, fan, "short")
+        self.assertFalse(against["flagged"])
+        self.assertTrue(against["pulled"])
+
+    def test_one_sided_fan_from_one_sigma_out_counts(self):
+        ctx = {"z": -1.1, "bars": 128}
+        self.assertTrue(analysis.reversion(ctx, {"n": 300, "up": 280, "down": 20}, "long")["flagged"])
+        self.assertFalse(analysis.reversion(ctx, {"n": 300, "up": 200, "down": 100}, "long")["flagged"])
+
+    def test_centred_close_is_not_flagged(self):
+        ctx = analysis.context(np.sin(np.linspace(0, 20, 128)) + 100, 100.0)
+        rv = analysis.reversion(ctx, {"n": 300, "up": 180, "down": 120}, "long")
+        self.assertFalse(rv["pulled"])
+        self.assertEqual(rv["label"], "")
+
+    def test_combine_skips_a_pulled_fan(self):
+        race = {"lean": 0.4, "side": "long"}
+        pulled = analysis.reversion({"z": -2.0, "bars": 128}, {"n": 300, "up": 300, "down": 0}, "long")
+        self.assertEqual(analysis.combine(race, None, 0.85, pulled)["action"], "SKIP")
+        self.assertEqual(analysis.combine(race, None, 0.85, None)["action"], "PAPER ONLY")

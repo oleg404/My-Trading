@@ -42,9 +42,10 @@ def kronos_view(run: dict, now: float | None = None) -> dict:
     plan_dir = (1 if r["plan"]["side"] == "long" else -1) if r.get("plan") else 0
     age_h = ((now or time.time()) - run["created"]) / 3600
     window_h = STEP_HOURS.get(r.get("timeframe"), 1) * (r.get("horizon") or 48)
-    cal = r.get("calibration")
+    cal, rv = r.get("calibration"), r.get("reversion") or {}
     return {"run": run, "r": r, "dir": direction, "lean": r.get("lean") if plan_dir == direction else None,
-            "age_h": age_h, "stale": age_h > window_h / 2, "cal_bad": cal is not None and cal < 0.6}
+            "age_h": age_h, "stale": age_h > window_h / 2, "cal_bad": cal is not None and cal < 0.6,
+            "reversion": bool(rv.get("flagged")), "reversion_note": rv.get("label") or ""}
 
 
 def latest_report(reports: list[dict], ticker: str) -> dict | None:
@@ -68,6 +69,12 @@ def combine(a: dict | None, k: dict | None) -> dict:
         return {"call": "NO CALL YET", "why": ["Neither the agents nor Kronos has run on this ticker."]}
     if not k:
         return {"call": "HALF A CALL", "why": [f"Only the agents have spoken ({WORD[a['dir']].lower()}). Run Kronos for the short-term view."]}
+    if k.get("reversion"):
+        note = k.get("reversion_note") or "Kronos's fan only drifted back toward the average of the candles it saw."
+        more = ("Run the agents for the longer-term view." if not a else
+                f"The agents say {WORD[a['dir']].lower()}" + (f" ({a['report'].get('rating')})" if a["report"].get("rating") else "") +
+                "; there is no real second opinion until Kronos is re-run after the price settles.")
+        return {"call": "WAIT", "why": [note, more]}
     if not a:
         return {"call": "HALF A CALL", "why": [f"Only Kronos has spoken ({WORD[k['dir']].lower()}). Run the agents for the longer-term view."]}
     if a["dir"] == 0:

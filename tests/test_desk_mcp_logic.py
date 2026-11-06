@@ -94,3 +94,20 @@ class PortfolioTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ReversionTest(unittest.TestCase):
+    def test_pulled_kronos_fan_is_a_wait_whatever_the_agents_say(self):
+        k = scan(0, 300, "long", 0.4)
+        k["result"]["reversion"] = {"flagged": True, "z": -3.0, "label": "The fan follows the window, not the market."}
+        view = logic.kronos_view(k)
+        self.assertTrue(view["reversion"])
+        for a in (None, logic.agent_view(report("Overweight"), TODAY), logic.agent_view(report("Underweight"), TODAY)):
+            c = logic.combine(a, view)
+            self.assertEqual(c["call"], "WAIT")
+            self.assertIn("follows the window", c["why"][0])
+
+    def test_unpulled_fan_keeps_the_old_call(self):
+        view = logic.kronos_view(scan(0, 300, "long", 0.4))
+        self.assertFalse(view["reversion"])
+        self.assertEqual(logic.combine(logic.agent_view(report("Overweight"), TODAY), view)["call"], "LONG")

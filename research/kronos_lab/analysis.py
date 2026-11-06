@@ -12,6 +12,8 @@ import numpy as np
 QUANTILES = (10, 25, 50, 75, 90)
 COIN_FLIP = 0.05  # same thresholds as trader-timemachine's verdict
 STRONG = 0.15
+REVERSION_Z = 1.5  # a last close this far from the window's average is pulled back toward it
+ONE_SIDED = 0.9  # a fan this one-sided, from a close one sigma out, is the pull too
 
 
 def bar_reach(paths: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
@@ -32,6 +34,38 @@ def fan(paths: np.ndarray, last_close: float) -> dict:
         "end_pct": {f"p{q}": round(float(np.percentile(end_pct, q)), 3) for q in QUANTILES},
         "bands": bands,
     }
+
+
+def context(history_close, last_close: float) -> dict:
+    """Where the last close sits inside the window Kronos saw: its z-score against the window's
+    mean and its place in the window's range (0 = the low, 1 = the high). Kronos z-scores that
+    window, so a last close far below the average tends to get paths that climb back toward it,
+    and one far above gets paths that fall: the window's shape, not a forecast."""
+    c = np.asarray(history_close, dtype=float)
+    mean, std = float(c.mean()), float(c.std())
+    lo, hi = float(c.min()), float(c.max())
+    z = (float(last_close) - mean) / std if std > 0 else 0.0
+    pos = (float(last_close) - lo) / (hi - lo) if hi > lo else 0.5
+    return {"z": round(z, 2), "pos": round(pos, 3), "mean": round(mean, 6), "bars": int(len(c))}
+
+
+def reversion(ctx: dict, fan: dict, side: str) -> dict:
+    """Whether the plan's side is just the pull toward the window's average. `pulled` says the
+    last close is far enough out for the pull to show; `flagged` says the side follows it."""
+    z, n = float(ctx.get("z") or 0.0), max(int(fan.get("n") or 0), 1)
+    share = max(int(fan.get("up") or 0), int(fan.get("down") or 0)) / n
+    pulled = abs(z) >= REVERSION_Z or (abs(z) >= 1.0 and share >= ONE_SIDED)
+    toward = "long" if z < 0 else "short"
+    flagged = bool(pulled and side == toward)
+    where = f"{abs(z):.1f} sigma {'below' if z < 0 else 'above'} the average of the {ctx.get('bars') or ''} candles Kronos saw".replace("  ", " ")
+    if flagged:
+        label = (f"The fan follows the window, not the market: the last close sits {where}, and Kronos pulls its paths "
+                 f"back toward that average. Treat the {side} as unproven.")
+    elif pulled:
+        label = f"The last close sits {where}; the fan leans against that pull, which says more than usual."
+    else:
+        label = ""
+    return {"flagged": flagged, "pulled": bool(pulled), "toward": toward if pulled else None, "z": round(z, 2), "label": label}
 
 
 def levels(entry: float, side: str, stop_pct: float, target_pct: float) -> tuple[float, float]:
@@ -133,12 +167,17 @@ def calibration_label(share) -> tuple[str, str]:
     return "Band too wide: odds are vaguer than they look", "warn"
 
 
-def combine(kronos: dict, timemachine: dict | None, calib_share) -> dict:
-    """Step 8 of the use case: if the Time Machine disagrees with Kronos, skip the trade."""
+def combine(kronos: dict, timemachine: dict | None, calib_share, reversion: dict | None = None) -> dict:
+    """Step 8 of the use case: if the Time Machine disagrees with Kronos, skip the trade. A fan
+    that only follows the pull toward its window's average is skipped too."""
     reasons = []
     k_lean = kronos.get("lean")
     if k_lean is None:
         return {"action": "SKIP", "cls": "warn", "reasons": ["No Kronos path reached the stop or the target."]}
+    pulled = bool(reversion and reversion.get("flagged"))
+    if pulled:
+        reasons.append(f"Kronos's fan is reverting to its window average (last close {abs(reversion['z']):.1f} sigma "
+                       f"{'below' if reversion['z'] < 0 else 'above'} it), not forecasting the {kronos.get('side')}.")
     if abs(k_lean) < COIN_FLIP:
         reasons.append("Kronos is close to break-even on this stop and target.")
     elif k_lean < 0:
@@ -150,7 +189,7 @@ def combine(kronos: dict, timemachine: dict | None, calib_share) -> dict:
         reasons.append("Kronos was not checked against recent days.")
     if timemachine is None:
         reasons.append("No Time Machine second opinion for this plan.")
-        if k_lean >= COIN_FLIP and cal_cls != "bad":
+        if k_lean >= COIN_FLIP and cal_cls != "bad" and not pulled:
             return {"action": "PAPER ONLY", "cls": "warn", "reasons": reasons}
     else:
         tm_lean = timemachine.get("lean")

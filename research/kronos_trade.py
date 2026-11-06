@@ -88,15 +88,17 @@ def scan(a: argparse.Namespace) -> dict:
     progress(8, f"Sampling {a.paths} futures, {a.horizon} candles ahead")
     paths = _sample(predictor, hist, future, a.paths, a, 8, main_end, "futures")
     fan = analysis.fan(paths, last_close)
+    fan["context"] = analysis.context(hist["close"], last_close)
 
     side = a.side if a.side != "auto" else ("short" if fan["down"] > fan["up"] else "long")
+    fan["reversion"] = analysis.reversion(fan["context"], fan, side)
     stop, target = analysis.levels(last_close, side, a.stop_pct, a.target_pct)
     race = analysis.race(paths, last_close, stop, target, side)
 
     calib = calibrate(predictor, df, a, bpd, crypto, main_end)
     tm = None if a.no_timemachine else timemachine(a.symbol, side, last_close, stop, target, crypto)
     tm_view = tm if tm and "lean" in tm else None
-    decision = analysis.combine(race, tm_view, calib["share"])
+    decision = analysis.combine(race, tm_view, calib["share"], fan["reversion"])
 
     out = Path(a.out)
     out.parent.mkdir(parents=True, exist_ok=True)
@@ -216,7 +218,9 @@ def main(argv=None) -> int:
     tmp.write_text(json.dumps(result))
     tmp.replace(a.out)
     r = result["race"]
-    print(f"{a.symbol}: {result['fan']['down']} of {result['fan']['n']} futures end down -> {r['side']} | "
+    rv = result["fan"]["reversion"]
+    print(f"{a.symbol}: {result['fan']['down']} of {result['fan']['n']} futures end down -> {r['side']}"
+          f"{' (reversion: window pull)' if rv['flagged'] else ''} | "
           f"target first {r['target_first']}, stop first {r['stop_first']}, neither {r['neither']} | "
           f"calibration {result['calibration']['share']} | {result['decision']['action']}")
     return 0
