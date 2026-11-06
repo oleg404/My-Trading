@@ -17,6 +17,7 @@ os.environ["TRADINGAGENTS_HOME"] = HOME
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "tradingagents" / "dashboard"))
 
 import claude_review  # noqa: E402
+import daily_scan  # noqa: E402
 import portfolios  # noqa: E402
 import store  # noqa: E402
 import workflows  # noqa: E402
@@ -64,6 +65,7 @@ class WorkflowTest(unittest.TestCase):
 
     def test_defaults_and_validation(self):
         self.assertEqual((self.w["market"], self.w["limit"], self.w["everyHours"], self.w["sizePct"]), ("crypto", 10, 4, 10.0))
+        self.assertTrue(self.w["agents"])  # a strong label needs the agents' view
         with self.assertRaises(ValueError):
             workflows.clean({"name": "", "portfolio": self.pid})
         with self.assertRaises(ValueError):
@@ -100,6 +102,7 @@ class WorkflowTest(unittest.TestCase):
         self.assertEqual(notes["BTC-USD"][0], "skipped"); self.assertIn("window pull", notes["BTC-USD"][1])
         self.assertEqual(notes["SOL-USD"][0], "skipped"); self.assertIn("PASS", notes["SOL-USD"][1])
         self.assertEqual(notes["ETH-USD"][0], "skipped"); self.assertIn("not a trade", notes["ETH-USD"][1])
+        self.assertEqual([d["reason"] for d in run["decisions"]], ["pull", "review", "label"])
         self.assertEqual(self.book()["positions"], [])
 
     def test_attention_label_trades_when_allowed(self):
@@ -153,6 +156,21 @@ class WorkflowTest(unittest.TestCase):
         self.assertIn("mixed signals", run["decisions"][0]["note"])
         self.assertEqual(run["decisions"][1]["action"], "failed")  # the crypto-only book refuses a stock
         self.assertIn("crypto only", run["decisions"][1]["note"])
+
+    def test_race_levels_follow_the_atr(self):
+        with mock.patch.object(store, "levels", return_value={"atrPct": 4.37}):
+            self.assertEqual(daily_scan.race_levels("SOL-USD"), {"stopPct": 4.37, "targetPct": 8.74, "atrPct": 4.37})
+        with mock.patch.object(store, "levels", return_value={"atrPct": 0.6}):
+            self.assertEqual(daily_scan.race_levels("KO")["stopPct"], 1.0)  # never tighter than the old 1%
+        with mock.patch.object(store, "levels", return_value={"atrPct": 25.0}):
+            self.assertEqual(daily_scan.race_levels("PONS-USD")["targetPct"], 20.0)  # capped at 10% / 20%
+        with mock.patch.object(store, "levels", return_value={"atrPct": None}):
+            self.assertEqual(daily_scan.race_levels("NEW-USD"), {"stopPct": 1.0, "targetPct": 2.0, "atrPct": None})
+
+    def test_pass_keeps_claudes_summary(self):
+        doc = scan([studied("BTC-USD")], [pick("BTC-USD", "SKIP", "none")])
+        doc["picks"]["summary"] = "No trade today."
+        self.assertEqual(self.run_pass(doc)["summary"], "No trade today.")
 
     def test_next_run_and_recover(self):
         w = workflows.create({"name": "Nightly", "portfolio": self.pid, "everyHours": 6})["workflows"][-1]
