@@ -1,0 +1,13 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "dashboard",
+      "runtimeExecutable": "/Users/olegshuster/My-Trading/scripts/dashboard.sh",
+      "runtimeArgs": [
+        "fg"
+      ],
+      "port": 8787
+    }
+  ]
+}
