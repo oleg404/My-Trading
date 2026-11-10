@@ -1,6 +1,7 @@
 """Offline tests for the desk's workflow rules (tradingagents/dashboard/workflows.py) and the
 conviction score they trade on (conviction.py): validation, the score, and how one pass turns
-a scan into paper trades. No model, no network.
+a scan into paper trades, including the position cap, the market regime and the lessons from
+closed trades. No model, no network.
 
 Run (from the tradingagents folder, so its package wins over the repo folder of the same name):
     cd tradingagents && .venv/bin/python ../tests/test_workflows.py -v
@@ -9,6 +10,7 @@ Run (from the tradingagents folder, so its package wins over the repo folder of 
 import os
 import sys
 import tempfile
+import time
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -20,7 +22,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "tradingagents" 
 import claude_review  # noqa: E402
 import conviction  # noqa: E402
 import daily_scan  # noqa: E402
+import lessons  # noqa: E402
 import portfolios  # noqa: E402
+import risk  # noqa: E402
 import store  # noqa: E402
 import workflows  # noqa: E402
 
@@ -45,6 +49,16 @@ def studied(ticker, verdict="TAKE", pull=False, plan=None, review_id=None, lean=
                                                                     "up": up, "down": down, "n": up + down, "lean": race, "calibration": cal}},
             "claude": {"id": review_id, "status": "done", "verdict": verdict, "side": lean if verdict != "PASS" else "none",
                        "size_pct": 8 if verdict != "PASS" else 0, "confidence": confidence}}
+
+
+def regime(side=None, strength=None, market="crypto"):
+    return {"market": market, "side": side, "strength": strength, "why": f"{strength or 'no'} {side or 'clear'} regime"}
+
+
+def lost(n, market="crypto", side="long", probe=False):
+    """n closed losing trades, as lessons.journal() returns them."""
+    return [{"market": market, "side": side, "pnl": -10.0, "pct": -2.0, "probe": probe, "parts": {}, "exitKind": "stop",
+             "withRegime": None, "closed": time.time() - 3600 + i} for i in range(n)]
 
 
 def scan(tickers, picks):
@@ -79,7 +93,6 @@ class ConvictionTest(unittest.TestCase):
 
     def test_band_grades_against_the_desks_own_record(self):
         self.assertEqual([conviction.band_grade(x)[0] for x in (None, 0.35, 0.45, 0.6, 0.79)], ["unchecked", "weak", "ordinary", "good", "strong"])
-        self.assertEqual((conviction.size_factor(80), conviction.size_factor(62), conviction.size_factor(50)), (1.0, 0.75, 0.5))
 
     def test_no_view_means_no_side(self):
         t = {"ticker": "ETH-USD", "price": 4000.0, "side": None, "why": [], "agents": None, "kronos": {}, "claude": {}}
@@ -89,15 +102,21 @@ class ConvictionTest(unittest.TestCase):
 
 class WorkflowTest(unittest.TestCase):
     def setUp(self):
+        # Patched before the book is created: creating one values every book, which would otherwise fetch live quotes.
+        self.quotes = mock.patch.object(store, "quotes", side_effect=lambda t: {x: PRICES.get(x, {"price": None}) for x in t})
+        self.quotes.start()
+        store._quotes.clear()
         self.pid = portfolios.create({"name": f"Coins {self._testMethodName}"[:40], "rule": "crypto", "cash": 10000, "activate": True})["active"]
         self.w = workflows.clean({"name": "Crypto every 4h", "portfolio": self.pid})
         self.w.update(id="a" * 32, runs=[], lastRun=None)
-        self.quotes = mock.patch.object(store, "quotes", side_effect=lambda t: {x: PRICES.get(x, {"price": None}) for x in t})
-        self.quotes.start()
         self.notify = mock.patch.object(workflows.checks, "notify")
         self.notify.start()
         self.review = mock.patch.object(claude_review, "get", return_value={"review": {"stop": 97000.0, "target": 106000.0}})
         self.review.start()
+        self.regime = mock.patch.object(risk, "regime", return_value=regime())  # no clear regime unless a test sets one
+        self.regime.start()
+        self.journal = mock.patch.object(lessons, "journal", return_value=[])   # no closed trades unless a test gives some
+        self.journal.start()
 
     def tearDown(self):
         mock.patch.stopall()
@@ -111,7 +130,7 @@ class WorkflowTest(unittest.TestCase):
         return portfolios.book(self.pid)
 
     def test_defaults_and_validation(self):
-        self.assertEqual((self.w["market"], self.w["limit"], self.w["everyHours"], self.w["sizePct"]), ("crypto", 10, 4, 10.0))
+        self.assertEqual((self.w["market"], self.w["limit"], self.w["everyHours"], self.w["sizePct"]), ("crypto", 10, 4, 5.0))
         self.assertEqual((self.w["minLabel"], self.w["minScore"], self.w["probe"], self.w["requireClaude"]), ("score", 50, True, False))
         with self.assertRaises(ValueError):
             workflows.clean({"name": "", "portfolio": self.pid})
@@ -122,7 +141,7 @@ class WorkflowTest(unittest.TestCase):
         with self.assertRaises(ValueError):
             workflows.clean({"name": "x", "portfolio": self.pid, "stopPct": 5, "targetPct": 4})
         with self.assertRaises(ValueError):
-            workflows.clean({"name": "x", "portfolio": self.pid, "sizePct": 50})
+            workflows.clean({"name": "x", "portfolio": self.pid, "sizePct": 6})  # over the desk's 5% position cap
         with self.assertRaises(ValueError):
             workflows.clean({"name": "x", "portfolio": self.pid, "minScore": 101})
         with self.assertRaises(ValueError):
@@ -134,27 +153,70 @@ class WorkflowTest(unittest.TestCase):
         self.assertEqual((w["minLabel"], w["minScore"], w["probe"], w["requireClaude"]), ("score", 50, True, False))
         self.assertIn("upgraded", w)
         self.assertNotIn("upgraded", workflows._upgrade({"id": "n" * 32, "minScore": 60}))
+        self.assertEqual(workflows._upgrade({"id": "n" * 32, "minScore": 60, "sizePct": 10.0})["sizePct"], 5.0)  # saved before the cap
+        # Saved before the desk filled its books: room for 18 positions at the cap, once; a later edit to fewer stays.
+        self.assertEqual(workflows._upgrade({"id": "n" * 32, "minScore": 60, "maxPositions": 5})["maxPositions"], 18)
+        self.assertEqual(workflows._upgrade({"id": "n" * 32, "minScore": 60, "maxPositions": 5, "deploy": True})["maxPositions"], 5)
+        self.assertEqual((self.w["maxPositions"], self.w["deploy"]), (18, True))
 
     def test_strong_buy_opens_a_long_with_claudes_levels(self):
         run = self.run_pass(scan([studied("BTC-USD", review_id="c" * 32)], [pick("BTC-USD", "STRONG BUY", "long")]))
         d = run["decisions"][0]
         self.assertEqual((d["action"], d["score"], d["probe"]), ("opened", 90, False))
         self.assertEqual((d["stop"], d["target"], d["levels"]), (97000.0, 106000.0, "Claude's levels"))
-        self.assertAlmostEqual(d["quantity"], 0.008, places=4)  # 8% of 10,000 at 100,000, full size at a score of 90
+        self.assertAlmostEqual(d["quantity"], 0.005, places=4)  # Claude asked for 8%; the cap is 5% of 10,000 at 100,000
+        entry = self.book()["trades"][0]["entry"]  # what the desk knew, kept for the lessons
+        self.assertEqual((entry["source"], entry["score"], entry["probe"], entry["regime"], entry["parts"]["agents"]), ("workflow", 90, False, "none", 25))
         pos = self.book()["positions"][0]
         self.assertEqual((pos["ticker"], pos["stop"], pos["target"]), ("BTC-USD", 97000.0, 106000.0))
         self.assertIn("review_by", pos)
         self.assertTrue(self.book()["trades"][0]["note"].startswith("Workflow Crypto every 4h: opened long at score 90"))
 
-    def test_size_follows_the_cap_and_the_score(self):
-        self.w["sizePct"] = 5.0
+    def test_size_is_the_full_size_once_the_bar_is_cleared(self):
+        self.w["sizePct"] = 4.0
         run = self.run_pass(scan([studied("SOL-USD")], [pick("SOL-USD", "STRONG BUY", "long", size=20)]))
-        self.assertEqual(run["decisions"][0]["pct"], 5.0)
-        self.assertAlmostEqual(run["decisions"][0]["quantity"], 2.5, places=4)
-        self.w["sizePct"] = 10.0
+        self.assertEqual(run["decisions"][0]["pct"], 4.0)
+        self.assertAlmostEqual(run["decisions"][0]["quantity"], 2.0, places=4)
+        self.w["sizePct"] = 10.0  # a workflow saved before the cap: the cap still wins
         run = self.run_pass(scan([studied("ETH-USD", verdict="PASS", confidence="low")], [pick("ETH-USD", "WORTH ATTENTION", "long")]))
         d = run["decisions"][0]
-        self.assertEqual((d["action"], d["score"], d["pct"]), ("opened", 62, 6.0))  # Claude's 8%, three quarters from a score of 60
+        self.assertEqual((d["action"], d["score"], d["pct"]), ("opened", 62, 5.0))  # the 5% cap in full: the score no longer shrinks it
+
+    def test_a_held_pick_is_topped_up_to_the_full_size(self):
+        portfolios.record_trade({"portfolio": self.pid, "ticker": "SOL-USD", "side": "buy", "quantity": 0.5, "price": 200.0,
+                                 "stop": 190.0, "target": 230.0, "note": "Workflow first: probe long at score 45"})  # 1% of the book
+        run = self.run_pass(scan([studied("SOL-USD")], [pick("SOL-USD", "STRONG BUY", "long")]))
+        d = run["decisions"][0]
+        self.assertEqual((d["action"], d["pct"], run["added"], run["opened"]), ("added", 4.0, 1, 0))
+        pos = self.book()["positions"][0]
+        self.assertAlmostEqual(pos["quantity"], 2.5, places=4)  # 5% of 10,000 at 200
+        self.assertEqual((pos["stop"], pos["target"]), (190.0, 230.0))  # the plan it had stays
+        self.assertTrue(self.book()["trades"][0]["note"].startswith("Workflow Crypto every 4h: added to the long at score 90"))
+        run = self.run_pass(scan([studied("SOL-USD")], [pick("SOL-USD", "STRONG BUY", "long")]))
+        self.assertEqual((run["decisions"][0]["reason"], run["added"]), ("held", 0))
+        self.assertIn("its full size", run["decisions"][0]["note"])
+
+    def test_no_top_up_under_the_bar_or_after_a_review_halved_it(self):
+        portfolios.record_trade({"portfolio": self.pid, "ticker": "SOL-USD", "side": "buy", "quantity": 0.5, "price": 200.0, "note": "Study tab"})
+        weak = studied("SOL-USD", verdict="TAKE SMALL", agents=None, fan=(180, 120), race=0.08, cal=0.5)
+        run = self.run_pass(scan([weak], [pick("SOL-USD", "WORTH ATTENTION", "long")]))
+        self.assertEqual((run["decisions"][0]["reason"], run["opened"], run["added"]), ("held", 0, 0))  # and it is not probed either
+        book = self.book()
+        book["positions"][0]["trimmed"] = "2026-11-10"
+        portfolios._save(book)
+        run = self.run_pass(scan([studied("SOL-USD")], [pick("SOL-USD", "STRONG BUY", "long")]))
+        self.assertEqual(run["decisions"][0]["reason"], "held")
+        self.assertIn("closed half", run["decisions"][0]["note"])
+        self.assertAlmostEqual(self.book()["positions"][0]["quantity"], 0.5, places=4)
+
+    def test_the_book_is_filled_to_the_invested_limit_and_no_further(self):
+        with mock.patch.object(risk, "MAX_INVESTED_PCT", 8.0):
+            doc = scan([studied("BTC-USD"), studied("SOL-USD"), studied("ETH-USD")],
+                       [pick("BTC-USD", "STRONG BUY", "long"), pick("SOL-USD", "STRONG BUY", "long"), pick("ETH-USD", "STRONG BUY", "long")])
+            run = self.run_pass(doc)
+        self.assertEqual([(d["action"], d.get("pct"), d.get("reason")) for d in run["decisions"]],
+                         [("opened", 5.0, None), ("opened", 3.0, None), ("skipped", None, "invested")])
+        self.assertIn("8% of its equity", run["decisions"][2]["note"])
 
     def test_a_skip_label_still_trades_when_the_desk_agrees(self):
         run = self.run_pass(scan([studied("BTC-USD")], [pick("BTC-USD", "SKIP", "none", size=0, why="Claude did not rank it.")]))
@@ -191,7 +253,7 @@ class WorkflowTest(unittest.TestCase):
         by = {d["ticker"]: d for d in run["decisions"]}
         self.assertEqual((by["ETH-USD"]["action"], by["ETH-USD"]["reason"]), ("skipped", "score"))
         self.assertEqual((by["SOL-USD"]["action"], by["SOL-USD"]["probe"], by["SOL-USD"]["score"]), ("opened", True, 36))
-        self.assertEqual(by["SOL-USD"]["pct"], 2.0)  # Claude's 8%, half for a score under 60, half again for a probe
+        self.assertEqual(by["SOL-USD"]["pct"], 2.5)  # the 5% cap, half for a probe
         self.assertEqual(run["opened"], 1)
         self.assertTrue(self.book()["trades"][0]["note"].startswith("Workflow Crypto every 4h: probe long at score 36"))
 
@@ -228,7 +290,7 @@ class WorkflowTest(unittest.TestCase):
 
     def test_position_cap_counts_only_what_this_workflow_opened(self):
         # The Study tab and another workflow fill the same book; neither counts toward this workflow's cap.
-        portfolios.record_trade({"portfolio": self.pid, "ticker": "ETH-USD", "side": "sell", "quantity": 0.5, "price": 4000.0,
+        portfolios.record_trade({"portfolio": self.pid, "ticker": "ETH-USD", "side": "sell", "quantity": 0.1, "price": 4000.0,
                                  "note": "Study tab: paper short"})
         portfolios.record_trade({"portfolio": self.pid, "ticker": "SOL-USD", "side": "sell", "quantity": 1.0, "price": 200.0,
                                  "note": "Workflow first: probe short at score 45"})
@@ -261,7 +323,7 @@ class WorkflowTest(unittest.TestCase):
         self.run_pass(scan([studied("BTC-USD")], [pick("BTC-USD", "STRONG BUY", "long")]))
         self.assertEqual(len(self.book()["positions"]), 1)
         run = self.run_pass(scan([studied("BTC-USD")], [pick("BTC-USD", "STRONG BUY", "long")]))
-        self.assertIn("already long", run["decisions"][0]["note"])
+        self.assertIn("already long", run["decisions"][0]["note"])  # at its full size: nothing to add
         run = self.run_pass(scan([studied("BTC-USD", verdict="PASS")], [pick("BTC-USD", "WORTH ATTENTION", "short")]))
         self.assertEqual(run["decisions"][0]["reason"], "score")  # a weak reverse (every view still long) does not flip the book
         run = self.run_pass(scan([studied("BTC-USD", lean="short")], [pick("BTC-USD", "STRONG SELL", "short")]))
@@ -291,6 +353,53 @@ class WorkflowTest(unittest.TestCase):
         doc["picks"]["summary"] = "No trade today."
         run = self.run_pass(doc)
         self.assertEqual((run["summary"], run["bar"], run["decisions"][0]["reason"]), ("No trade today.", 50, "side"))
+
+    def test_a_pick_against_a_strong_regime_is_not_opened(self):
+        # Every view says long, but the coin market is in a strong short regime: the desk does not buy into it.
+        self.regime.stop()
+        with mock.patch.object(risk, "regime", return_value=regime("short", "strong")):
+            run = self.run_pass(scan([studied("BTC-USD"), studied("SOL-USD", lean="short")],
+                                     [pick("BTC-USD", "STRONG BUY", "long"), pick("SOL-USD", "STRONG SELL", "short")]))
+        by = {d["ticker"]: d for d in run["decisions"]}
+        self.assertEqual((by["BTC-USD"]["action"], by["BTC-USD"]["reason"], by["BTC-USD"]["score"]), ("skipped", "regime", 70))  # 90 - 20
+        self.assertEqual((by["SOL-USD"]["action"], by["SOL-USD"]["score"]), ("opened", 95))  # with the regime: 90 + 5
+        self.assertIn("strong short regime", run["regime"])
+        self.assertEqual([p["ticker"] for p in self.book()["positions"]], ["SOL-USD"])
+        self.regime.start()
+
+    def test_against_a_lean_regime_costs_points_and_size_and_is_never_a_probe(self):
+        self.regime.stop()
+        with mock.patch.object(risk, "regime", return_value=regime("short", "lean")):
+            run = self.run_pass(scan([studied("BTC-USD")], [pick("BTC-USD", "STRONG BUY", "long")]))
+            d = run["decisions"][0]
+            self.assertEqual((d["action"], d["score"], d["pct"]), ("opened", 80, 2.5))  # 90 - 10, and half of the 5%
+            weak = studied("SOL-USD", verdict="TAKE SMALL", agents=None, fan=(180, 120), race=0.08, cal=0.5)
+            run = self.run_pass(scan([weak], [pick("SOL-USD", "WORTH ATTENTION", "long")]))
+            self.assertEqual((run["opened"], run["decisions"][0]["reason"]), (0, "score"))  # 26 is under the probe floor of 35
+            near = studied("SOL-USD", verdict="TAKE SMALL", agents=None)  # 53 - 10 = 43: over the probe floor, under the bar
+            run = self.run_pass(scan([near], [pick("SOL-USD", "WORTH ATTENTION", "long")]))
+            self.assertEqual((run["opened"], run["decisions"][0]["score"], run["decisions"][0]["reason"]), (0, 43, "regime"))
+        self.regime.start()
+
+    def test_a_losing_streak_raises_the_bar_and_stops_the_probes(self):
+        self.journal.stop()
+        weak = studied("SOL-USD", verdict="TAKE SMALL", agents=None, fan=(180, 120), race=0.08, cal=0.5)  # scores 36
+        with mock.patch.object(lessons, "journal", return_value=lost(3, side="short")):
+            run = self.run_pass(scan([studied("ETH-USD", verdict="PASS")], [pick("ETH-USD", "STRONG BUY", "long")]))
+            self.assertEqual((run["bar"], run["decisions"][0]["reason"]), (60, "score"))  # a 58 cleared 50, not 50 + 10
+            self.assertIn("3 losses in a row", run["decisions"][0]["note"])
+            run = self.run_pass(scan([weak], [pick("SOL-USD", "WORTH ATTENTION", "long")]))
+            self.assertEqual(run["opened"], 0)  # three losses: no probes until a trade wins
+        self.journal.start()
+
+    def test_the_desks_record_on_a_side_moves_its_score(self):
+        self.journal.stop()
+        with mock.patch.object(lessons, "journal", return_value=lost(8, side="long") + [dict(lost(1)[0], pnl=5.0, pct=1.0, closed=time.time())]):
+            run = self.run_pass(scan([studied("BTC-USD")], [pick("BTC-USD", "STRONG BUY", "long")]))
+        d = run["decisions"][0]  # longs won 1 of 9: 40 * 9/17 * (0.11 - 0.5) = -8 points
+        self.assertEqual((d["action"], d["score"]), ("opened", 82))
+        self.assertIn("the desk's record on longs -8", d["tally"])
+        self.journal.start()
 
     def test_next_run_and_recover(self):
         w = workflows.create({"name": "Nightly", "portfolio": self.pid, "everyHours": 6})["workflows"][-1]

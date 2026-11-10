@@ -42,7 +42,7 @@ mcp = MCPServer(
         "Tools for the user's local TradingAgents desk: paper portfolios, AI-agent reports, Kronos price-path "
         "scans and the combined call that merges them. Everything is paper trading; no order reaches a broker. "
         "Before record_paper_trade with confirm=true, always show the user the ticket from the confirm=false call "
-        "and wait for an explicit yes in the chat. New positions default to 10% of the chosen portfolio's equity. "
+        "and wait for an explicit yes in the chat. New positions default to 5% of the chosen portfolio's equity, which is also the most the desk lets one position be. "
         "This is research tooling, not financial advice: say so when asked for a recommendation."
     ),
 )

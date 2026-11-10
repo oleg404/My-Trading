@@ -13,7 +13,7 @@ from datetime import date
 WORD = {1: "LONG", -1: "SHORT", 0: "NEUTRAL"}
 STEP_HOURS = {"5m": 1 / 12, "15m": 0.25, "30m": 0.5, "1h": 1, "1d": 24}
 COIN_RE = re.compile(r"-(USD|USDT|USDC|BTC|ETH|EUR)$")
-POSITION_PCT = 10.0  # the desk's default paper position: 10% of the portfolio's equity
+POSITION_PCT = 5.0  # the desk's default paper position and its cap: 5% of the portfolio's equity (dashboard/risk.py)
 
 
 def is_coin(ticker: str) -> bool:
