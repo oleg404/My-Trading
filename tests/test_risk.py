@@ -188,6 +188,45 @@ class RegimeTest(unittest.TestCase):
         self.assertIn("strong short regime, against it -20", s["why"])
         self.assertEqual(conviction.brief(t, ctx=ctx)["against_regime"], "strong")
 
+    def test_the_cross_market_vote_counts_four_signals(self):
+        def week(pct, days=5):   # flat closes, then the last one `pct` percent above the close `days` back
+            return [100.0] * 25 + [100.0 * (1 + pct / 100)] if days else []
+        on = risk.macro_from({"BTC-USD": week(6, 7), "QQQ": week(4), "XLP": week(0), "GLD": week(-1), "UUP": week(-0.5)})
+        self.assertEqual((on["dir"], on["on"], on["off"]), (1, 4, 0))
+        off = risk.macro_from({"BTC-USD": week(-6, 7), "QQQ": week(-4), "XLP": week(1), "GLD": week(4), "UUP": week(0)})
+        self.assertEqual((off["dir"], off["on"], off["off"]), (-1, 0, 4))
+        self.assertEqual([s["name"] for s in off["signals"]], ["BTC week", "QQQ week", "QQQ vs XLP", "safe havens"])
+        mixed = risk.macro_from({"BTC-USD": week(-6, 7), "QQQ": week(4), "XLP": week(0), "GLD": week(1), "UUP": week(1)})
+        self.assertEqual((mixed["dir"], mixed["on"], mixed["off"]), (0, 2, 1))   # needs two more on one side
+        self.assertEqual(risk.macro_from({"QQQ": week(4)})["dir"], 0)              # one signal is no call
+        self.assertEqual(risk.macro_from({})["signals"], [])
+
+    def test_the_vote_confirms_or_holds_back_the_trend(self):
+        on, off, mixed = {"dir": 1, "on": 3, "off": 0, "signals": []}, {"dir": -1, "on": 0, "off": 3, "signals": []}, {"dir": 0, "on": 1, "off": 1, "signals": []}
+        self.assertEqual(risk.regime_from("stocks", RISING, [], on)["strength"], "strong")       # the vote backs the trend
+        self.assertEqual(risk.regime_from("stocks", RISING, [], mixed)["strength"], "lean")
+        r = risk.regime_from("crypto", FALLING, [-1] * 9, on)                                     # breadth agrees, the vote does not
+        self.assertEqual((r["side"], r["strength"]), ("short", "lean"))
+        self.assertEqual(risk.regime_from("crypto", FALLING, [-1] * 9, off)["strength"], "strong")
+        self.assertEqual(risk.regime_from("crypto", FALLING, [-1] * 9, mixed)["strength"], "strong")
+
+    def test_with_a_flat_trend_the_vote_leans_or_cancels_the_breadth(self):
+        on, off = {"dir": 1, "on": 3, "off": 0, "signals": []}, {"dir": -1, "on": 0, "off": 3, "signals": []}
+        r = risk.regime_from("stocks", FLAT, [], on)
+        self.assertEqual((r["side"], r["strength"]), ("long", "lean"))
+        self.assertEqual(risk.regime_from("crypto", FLAT, [-1] * 8, off)["side"], "short")
+        self.assertEqual(risk.regime_from("crypto", FLAT, [-1] * 8, on)["side"], None)   # breadth and vote pull apart
+
+    def test_the_regime_says_what_the_vote_saw(self):
+        m = risk.macro_from({"BTC-USD": [100.0] * 25 + [94.0], "QQQ": [100.0] * 25 + [96.0], "XLP": [100.0] * 26,
+                             "GLD": [100.0] * 25 + [104.0], "UUP": [100.0] * 26})
+        why = risk.regime_from("crypto", FALLING, [], m)["why"]
+        self.assertIn("across markets it is risk off, 0 on and 4 off", why)
+        self.assertIn("BTC week -6% off", why)
+        self.assertIn("safe havens +4% off", why)
+        self.assertNotIn("across markets", risk.regime_from("crypto", FALLING, [])["why"])
+        self.assertIn("too little data", risk.regime_from("crypto", FALLING, [], risk.macro_from({}))["why"])
+
     def test_breadth_reads_each_tickers_newest_report(self):
         reports = [{"ticker": "ETH-USD", "date": "2999-01-02", "generated": "b", "rating": "Underweight"},
                    {"ticker": "ETH-USD", "date": "2999-01-01", "generated": "a", "rating": "Overweight"},
