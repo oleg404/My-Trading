@@ -137,15 +137,16 @@ class AutoReviewTest(unittest.TestCase):
         self.assertNotIn("review_run", p)
         self.assertEqual(self.asked.call_args.args[:2], ("main", "LTC-USD"))  # then Claude is asked: hold, or close half
         self.assertEqual(self.asked.call_args.args[2]["report"], "LTC-USD_20261109_120000")
+        self.assertTrue(self.asked.call_args.args[4])
 
-    def test_the_half_close_switch_off_asks_nobody(self):
+    def test_the_half_close_switch_off_still_tops_up_but_does_not_ask_claude(self):
         checks.save_prefs({"checkTime": "09:35", "notify": False, "autoReanalyze": True, "autoExit": True, "autoHalf": False})
         with quotes():
             checks.auto_review()
         self.desk.jobs["job01"].update(status="done", report="LTC-USD_20261109_120000", decision="SELL")
         with quotes(**{"LTC-USD": 52.0}), mock.patch.object(store, "read_report", return_value={}):
             checks.auto_review()
-        self.asked.assert_not_called()
+        self.assertEqual((self.asked.call_args.args[1], self.asked.call_args.args[4]), ("LTC-USD", False))  # the top-up runs, Claude is not asked
 
     def test_report_levels_on_the_wrong_side_keep_the_old_ones(self):
         with quotes():

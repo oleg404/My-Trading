@@ -106,5 +106,31 @@ class DailyScanTest(unittest.TestCase):
         self.assertEqual(d["notes"], [])
 
 
+class CandidatesTest(unittest.TestCase):
+    """What a workflow leaves out of its scan: the candidates it names are skipped with its reason, and keep the
+    screen's side and whether they outranked a studied ticker."""
+
+    def setUp(self):
+        coin = lambda t, score, side: {"ticker": t, "name": t, "score": score, "side": side, "cap": 5e9, "why": ["x"], "price": 1.0}
+        rows = [coin("AAA-USD", 9, "long"), coin("BBB-USD", 8, "short"), coin("CCC-USD", 7, "long"), coin("DDD-USD", 6, "short"), coin("EEE-USD", 5, "long")]
+        for p in (mock.patch.object(daily_scan.watchlist, "screen", return_value={"rows": []}),
+                  mock.patch.object(daily_scan.watchlist, "coin_opportunities", return_value={"rows": rows})):
+            p.start(); self.addCleanup(p.stop)
+
+    def test_named_tickers_are_left_out_and_the_scan_moves_down_the_screens(self):
+        skip = {"AAA-USD": "held long in Coins; its review looks after it", "EEE-USD": "studied at 11:11 and passed over (score); it rests for 24 hours"}
+        picked, skipped = daily_scan.candidates("crypto", 2, False, skip)
+        self.assertEqual([c["ticker"] for c in picked], ["BBB-USD", "CCC-USD"])
+        self.assertEqual(skipped, [{"ticker": "AAA-USD", "reason": skip["AAA-USD"], "side": "long", "slot": True},   # it outranked a studied ticker
+                                   {"ticker": "EEE-USD", "reason": skip["EEE-USD"], "side": "long", "slot": False}])  # it would not have been studied
+        self.assertEqual([c["ticker"] for c in daily_scan.candidates("crypto", 2, False)[0]], ["AAA-USD", "BBB-USD"])
+
+    def test_a_scan_with_nothing_new_says_so(self):
+        everything = {t: "held" for t in ("AAA-USD", "BBB-USD", "CCC-USD", "DDD-USD", "EEE-USD")}
+        with mock.patch.object(daily_scan.claude_review, "ready", return_value={"ready": True, "reason": ""}), \
+                mock.patch.object(store, "settings", return_value={"ready": True}), self.assertRaises(daily_scan.NothingToStudy):
+            daily_scan.start({"market": "crypto", "limit": 2, "fresh": False, "skip": everything})
+
+
 if __name__ == "__main__":
     unittest.main()

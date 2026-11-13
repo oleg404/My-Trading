@@ -12,6 +12,7 @@ import sys
 import tempfile
 import time
 import unittest
+from datetime import date
 from pathlib import Path
 from unittest import mock
 
@@ -400,6 +401,78 @@ class WorkflowTest(unittest.TestCase):
         self.assertEqual((d["action"], d["score"]), ("opened", 82))
         self.assertIn("the desk's record on longs -8", d["tally"])
         self.journal.start()
+
+    # ---- a pass studies new tickers only ----
+
+    def hold(self, ticker="SOL-USD", side="sell", quantity=1.0, **plan):
+        portfolios.record_trade({"portfolio": self.pid, "ticker": ticker, "side": side, "quantity": quantity, "price": PRICES[ticker]["price"],
+                                 "workflow": self.w["id"], **plan})
+
+    def test_held_tickers_and_the_ones_passed_over_on_merit_are_left_out_of_the_scan(self):
+        self.hold()
+        now = time.time()
+        self.w["runs"] = [
+            {"started": now - 3600, "decisions": [{"ticker": "ETH-USD", "action": "skipped", "reason": "score"}, {"ticker": "BTC-USD", "action": "skipped", "reason": "cap"},
+                                                  {"ticker": "XRP-USD", "action": "failed", "reason": "error"}, {"ticker": "ADA-USD", "action": "skipped", "reason": "review"}]},
+            {"started": now - 30 * 3600, "decisions": [{"ticker": "DOT-USD", "action": "skipped", "reason": "score"}]}]
+        skip = workflows.scan_skips(self.w, self.book(), now)
+        self.assertEqual(sorted(skip), ["ADA-USD", "ETH-USD", "SOL-USD"])  # not the one that lacked room, the failed one or a day-old one
+        self.assertIn("its review looks after it", skip["SOL-USD"])
+        self.assertIn("passed over (score); it rests for 24 hours", skip["ETH-USD"])
+
+    def test_the_screen_turning_against_a_position_brings_its_review_forward(self):
+        self.hold("SOL-USD", "sell", reviewBy="2030-01-01")
+        self.hold("ETH-USD", "buy", 0.1, reviewBy="2030-01-01")
+        self.hold("BTC-USD", "sell", 0.004, reviewBy="2030-01-01")
+        left = [{"ticker": "SOL-USD", "side": "long", "slot": True},    # a short the screen now reads long
+                {"ticker": "ETH-USD", "side": "long", "slot": True},    # a long it still reads long
+                {"ticker": "BTC-USD", "side": "long", "slot": False},   # turned, but too far down the screens to count
+                {"ticker": "XRP-USD", "side": "long", "slot": True}, {"ticker": "ADA-USD", "reason": "already studied today"}]
+        notes = workflows.pull_reviews(self.pid, left, "2026-11-10")
+        by = {p["ticker"]: p["review_by"] for p in self.book()["positions"]}
+        self.assertEqual(by, {"SOL-USD": "2026-11-10", "ETH-USD": "2030-01-01", "BTC-USD": "2030-01-01"})
+        self.assertEqual(len(notes), 1)
+        self.assertIn("SOL-USD: held short, the screen now reads long", notes[0])
+        book = self.book()
+        next(p for p in book["positions"] if p["ticker"] == "SOL-USD").update(review_by="2030-01-01", review_date="2026-11-10")
+        portfolios._save(book)
+        self.assertEqual(workflows.pull_reviews(self.pid, left, "2026-11-10"), [])  # reviewed today already: once a day
+
+    def test_a_full_book_runs_no_scan_but_still_checks_its_positions(self):
+        self.hold("SOL-USD", "sell", reviewBy="2030-01-01")
+        self.assertIsNone(workflows.no_room(self.w, self.book()))
+        with mock.patch.object(risk, "MAX_INVESTED_PCT", 2.0):
+            self.assertIn("2% invested, the desk's limit", workflows.no_room(self.w, self.book()))
+        self.w["maxPositions"] = 1
+        self.assertIn("already holds its 1 positions", workflows.no_room(self.w, self.book()))
+        run = {"id": "r" * 32, "decisions": [], "stage": ""}
+        turned = ([], [{"ticker": "SOL-USD", "reason": "held", "side": "long", "slot": True}])
+        with mock.patch.object(daily_scan, "candidates", return_value=turned), mock.patch.object(daily_scan, "start") as start, \
+                self.assertRaises(daily_scan.NothingToStudy):
+            workflows._scan(self.w, run)
+        start.assert_not_called()
+        self.assertIn("its review was brought forward to today", run["left"][0])
+        self.assertEqual(self.book()["positions"][0]["review_by"], date.today().isoformat())
+
+    def test_a_pass_hands_the_scan_what_to_leave_out_and_notes_it(self):
+        self.hold()
+        doc = dict(scan([studied("BTC-USD")], [pick("BTC-USD", "STRONG BUY", "long")]),
+                   skipped=[{"ticker": "SOL-USD", "reason": "held", "side": "short", "slot": True}])
+        with mock.patch.object(daily_scan, "overview", return_value={"running": None}), mock.patch.object(daily_scan, "start", return_value=doc["id"]) as start, \
+                mock.patch.object(daily_scan, "get", return_value=doc):
+            run = {"id": "r" * 32, "decisions": [], "stage": ""}
+            workflows._decide(self.w, run, workflows._scan(self.w, run))
+        self.assertEqual(list(start.call_args.args[0]["skip"]), ["SOL-USD"])
+        self.assertEqual(run["notes"], ["Left out of this pass: 1 held (their reviews look after them), 0 resting after a pass in the last 24 hours."])
+        self.assertEqual(run["decisions"][0]["action"], "opened")
+
+    def test_a_pass_with_nothing_to_study_ends_quietly(self):
+        w = workflows.create({"name": "Quiet", "portfolio": self.pid})["workflows"][-1]
+        with mock.patch.object(workflows, "_scan", side_effect=daily_scan.NothingToStudy("Nothing new to study.")):
+            workflows.execute(w["id"], "manual")
+        run = workflows._load(w["id"])["runs"][0]
+        self.assertEqual((run["status"], run["notes"], run["error"], run["decisions"]), ("done", ["Nothing new to study."], None, []))
+        workflows.delete(w["id"])
 
     def test_next_run_and_recover(self):
         w = workflows.create({"name": "Nightly", "portfolio": self.pid, "everyHours": 6})["workflows"][-1]

@@ -1,6 +1,6 @@
-"""Offline tests for Claude's call after a position's review (tradingagents/dashboard/position_review.py): hold the
-position or close half of it, and what the positions table then needs (when a position was opened). Claude is
-mocked. No model, no network.
+"""Offline tests for what follows a position's review (tradingagents/dashboard/position_review.py): Claude holds
+the position or closes half of it, a position the agents still call is topped up to its full size, and what the
+positions table then needs (when a position was opened). Claude is mocked. No model, no network.
 
 Run (from the tradingagents folder, so its package wins over the repo folder of the same name):
     cd tradingagents && .venv/bin/python ../tests/test_position_review.py -v
@@ -23,10 +23,12 @@ import claude_review  # noqa: E402
 import lessons  # noqa: E402
 import portfolios  # noqa: E402
 import position_review  # noqa: E402
+import risk  # noqa: E402
 import store  # noqa: E402
 
 TODAY = date.today().isoformat()
 JOB = {"report": "LINK-USD_20261110_120000", "decision": "HOLD"}
+SELL = {"report": "LINK-USD_20261110_120000", "decision": "SELL"}
 
 
 def quotes(**prices):
@@ -44,7 +46,8 @@ class PositionReviewTest(unittest.TestCase):
         store._quotes.clear()
         for p in (mock.patch.object(store, "levels", return_value={"atrPct": 2.0}), mock.patch.object(store, "read_report", return_value={"rating": "Hold", "summary": "range-bound"}),
                   mock.patch.object(lessons, "brief", return_value={"market_regime": "no clear regime", "desk_record": []}),
-                  mock.patch.object(claude_review, "ready", return_value={"ready": True, "reason": ""})):
+                  mock.patch.object(claude_review, "ready", return_value={"ready": True, "reason": ""}),
+                  mock.patch.object(risk, "regime", return_value={"side": None, "strength": None})):
             p.start(); self.addCleanup(p.stop)
         with quotes():
             portfolios.record_trade({"ticker": "LINK-USD", "side": "sell", "quantity": 27.6568, "price": 10.84, "stop": 11.4, "target": 9.56})
@@ -101,6 +104,57 @@ class PositionReviewTest(unittest.TestCase):
         with mock.patch.object(claude_review, "ready", return_value={"ready": False, "reason": "logged out"}), mock.patch.object(claude_review, "ask") as ask:
             self.assertIsNone(position_review.judge("main", "LINK-USD", JOB))
         ask.assert_not_called()
+
+    def pct(self, ticker="LINK-USD", price=10.44):
+        book = portfolios.book()
+        return risk.position_pct(self.position(ticker)["quantity"], price, portfolios._equity_now(book, {ticker: price}))
+
+    def test_a_review_that_still_calls_the_side_tops_the_position_up_to_full_size(self):
+        with quotes(**{"LINK-USD": 10.44}):
+            self.assertAlmostEqual(self.pct(), 2.88, places=2)
+            done = position_review.top_up("main", "LINK-USD", SELL, notify := mock.Mock())
+            self.assertAlmostEqual(self.pct(), 5.0, delta=0.05)
+            self.assertIsNone(position_review.top_up("main", "LINK-USD", SELL))  # at its full size: nothing more
+        self.assertEqual(done["pct"], 2.12)
+        p = self.position()
+        self.assertEqual((p["stop"], p["target"]), (11.4, 9.56))  # the plan it had stays
+        trade = portfolios.book()["trades"][0]
+        self.assertEqual((trade["side"], trade["price"]), ("sell", 10.44))
+        self.assertTrue(trade["note"].startswith("Review: added to the short, the agents still say SELL; 2.12% more, now 5.0% of the book"))
+        notify.assert_called_once()
+
+    def test_no_top_up_when_the_agents_left_the_side_or_the_regime_or_a_halving_says_no(self):
+        with quotes(**{"LINK-USD": 10.44}):
+            self.assertIsNone(position_review.top_up("main", "LINK-USD", JOB))                    # the agents say Hold
+            self.assertIsNone(position_review.top_up("main", "LINK-USD", {"decision": "BUY"}))    # they turned
+            with mock.patch.object(risk, "regime", return_value={"side": "long", "strength": "strong"}):
+                self.assertIsNone(position_review.top_up("main", "LINK-USD", SELL))               # a short against a strong long regime
+            with mock.patch.object(risk, "regime", return_value={"side": "long", "strength": "lean"}):
+                self.assertIsNone(position_review.top_up("main", "LINK-USD", SELL))               # half size against a lean one: 2.9% is over 2.5%
+            with mock.patch.object(risk, "MAX_INVESTED_PCT", 5.0):
+                self.assertIsNone(position_review.top_up("main", "LINK-USD", SELL))               # the book is at its invested limit
+            book = portfolios.book()
+            book["positions"][0]["trimmed"] = TODAY
+            portfolios._save(book)
+            self.assertIsNone(position_review.top_up("main", "LINK-USD", SELL))                   # a review halved it
+        self.assertEqual(len(portfolios.book()["trades"]), 2)
+
+    def test_after_the_review_claude_is_asked_first_and_a_halved_position_is_not_topped_up(self):
+        half = {"action": "CLOSE HALF", "confidence": "medium", "reason": "Most of the move is done."}
+        with quotes(**{"LINK-USD": 10.44}), mock.patch.object(claude_review, "ask", return_value=(half, [])):
+            position_review.after_review("main", "LINK-USD", SELL)
+        self.assertAlmostEqual(self.position()["quantity"], -13.8284, places=4)  # halved, and nothing added back
+        hold = {"action": "HOLD", "confidence": "high", "reason": "The agents still say Sell."}
+        with quotes(**{"NVDA": 180.0}), mock.patch.object(claude_review, "ask", return_value=(hold, [])):
+            position_review.after_review("main", "NVDA", {"decision": "BUY"})
+        self.assertEqual(self.position("NVDA")["quantity"], 2)  # held, and topped up from 1.8% towards 5%: one more whole share fits
+
+    def test_with_the_half_close_switch_off_the_top_up_runs_without_claude(self):
+        with quotes(**{"LINK-USD": 10.44}), mock.patch.object(claude_review, "ask") as ask:
+            position_review.after_review("main", "LINK-USD", SELL, ask=False)
+        ask.assert_not_called()
+        self.assertAlmostEqual(self.pct(), 5.0, delta=0.05)
+        self.assertNotIn("review_claude", self.position())
 
     def test_a_position_knows_when_it_was_opened(self):
         self.assertAlmostEqual(self.position()["opened"], time.time(), delta=5)
