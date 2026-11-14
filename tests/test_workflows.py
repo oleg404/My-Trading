@@ -408,6 +408,46 @@ class WorkflowTest(unittest.TestCase):
         portfolios.record_trade({"portfolio": self.pid, "ticker": ticker, "side": side, "quantity": quantity, "price": PRICES[ticker]["price"],
                                  "workflow": self.w["id"], **plan})
 
+    def closed(self, ticker, side, quantity, note):
+        """Close a position the way the desk does: the opposite trade, with the note that says why."""
+        portfolios.record_trade({"portfolio": self.pid, "ticker": ticker, "side": side, "quantity": quantity, "price": PRICES[ticker]["price"], "note": note})
+
+    # ---- a stop-out cools a ticker's side down ----
+
+    def test_a_side_stopped_out_is_not_reopened_for_two_days(self):
+        self.hold("BTC-USD", "buy", 0.004)
+        self.closed("BTC-USD", "sell", 0.004, "Auto SELL: stop 97,000.00 reached")
+        run = self.run_pass(scan([studied("BTC-USD"), studied("SOL-USD", lean="short")],
+                                 [pick("BTC-USD", "STRONG BUY", "long"), pick("SOL-USD", "STRONG SELL", "short")]))
+        by = {d["ticker"]: d for d in run["decisions"]}
+        self.assertEqual((by["BTC-USD"]["action"], by["BTC-USD"]["reason"]), ("skipped", "cooldown"))
+        self.assertIn("the long was stopped out at", by["BTC-USD"]["note"])
+        self.assertIn("no new long on BTC-USD for 48 hours", by["BTC-USD"]["note"])
+        self.assertEqual(by["SOL-USD"]["action"], "opened")
+        self.assertEqual([p["ticker"] for p in self.book()["positions"]], ["SOL-USD"])
+
+    def test_the_cooldown_keeps_the_other_side_open_and_ends_after_48_hours(self):
+        self.hold("BTC-USD", "buy", 0.004)
+        self.closed("BTC-USD", "sell", 0.004, "Auto SELL: stop 97,000.00 reached")
+        book, now = self.book(), time.time()
+        self.assertIsNotNone(workflows.cooldown(book, "BTC-USD", "long", now))
+        self.assertIsNone(workflows.cooldown(book, "BTC-USD", "short", now))            # the other side stays open
+        self.assertIsNone(workflows.cooldown(book, "ETH-USD", "long", now))             # other tickers are free
+        self.assertIsNone(workflows.cooldown(book, "BTC-USD", "long", now + 49 * 3600))  # two days later it is free
+        run = self.run_pass(scan([studied("BTC-USD", lean="short")], [pick("BTC-USD", "STRONG SELL", "short")]))
+        self.assertEqual(run["decisions"][0]["action"], "opened")
+
+    def test_only_a_stop_starts_the_cooldown(self):
+        self.hold("BTC-USD", "buy", 0.004)
+        self.closed("BTC-USD", "sell", 0.004, "Auto SELL: target 106,000.00 reached")
+        self.hold("ETH-USD", "buy", 0.1)
+        self.closed("ETH-USD", "sell", 0.1, "Closed by hand")
+        self.hold("SOL-USD", "sell", 2.0)
+        self.closed("SOL-USD", "buy", 2.0, "Auto COVER: stop 210.00 reached")
+        book = self.book()
+        self.assertEqual([workflows.cooldown(book, t, s) is None for t, s in (("BTC-USD", "long"), ("ETH-USD", "long"), ("SOL-USD", "short"))],
+                         [True, True, False])                                     # a target or a hand close does not; a short's stop does
+
     def test_held_tickers_and_the_ones_passed_over_on_merit_are_left_out_of_the_scan(self):
         self.hold()
         now = time.time()
