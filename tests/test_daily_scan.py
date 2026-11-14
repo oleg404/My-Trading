@@ -132,5 +132,48 @@ class CandidatesTest(unittest.TestCase):
             daily_scan.start({"market": "crypto", "limit": 2, "fresh": False, "skip": everything})
 
 
+class StockPoolTest(unittest.TestCase):
+    """A stock scan's pool: the watchlist's stocks plus the market's busiest movers, deep enough that a workflow
+    resting what it passed over still finds new tickers."""
+
+    def test_the_pool_is_the_watchlist_plus_thirty_movers_with_a_side(self):
+        stock = lambda t, score, side: {"ticker": t, "crypto": False, "source": "market movers", "side": side, "score": score,
+                                        "why": ["x"], "price": 10.0}
+        movers = [stock(f"M{i:02d}", 30 - i, "long") for i in range(26)] + [stock("FLAT", 40, None), stock("NVDA", 50, "short")]
+        watched = {"rows": [{"ticker": "NVDA", "crypto": False, "error": None, "signals": ["volume 2.0× avg"], "bias": "long", "interest": 3, "price": 190.0},
+                            {"ticker": "SOL-USD", "crypto": True, "error": None, "signals": ["x"], "bias": "long", "interest": 9, "price": 150.0}]}
+        with mock.patch.object(daily_scan.watchlist, "screen", return_value=watched), \
+                mock.patch.object(daily_scan.backtests, "movers", return_value=movers) as asked, \
+                mock.patch.object(daily_scan, "_chart_setups"):
+            picked, skipped = daily_scan.candidates("stocks", 10, False, {"M00": "held long in Stocks Only; its review looks after it"})
+            pool = daily_scan.candidates("stocks", 20, False)[0] + daily_scan.candidates("stocks", 20, False, {f"M{i:02d}": "resting" for i in range(19)})[0]
+        asked.assert_called_with(30)
+        self.assertEqual([c["ticker"] for c in picked], [f"M{i:02d}" for i in range(1, 11)])   # busiest first, the held one left out
+        self.assertEqual(skipped, [{"ticker": "M00", "reason": "held long in Stocks Only; its review looks after it", "side": "long", "slot": True}])
+        names = {c["ticker"] for c in pool}
+        self.assertEqual(len(names), 27)                 # 26 movers and the watchlist's stock: more than one pass deep
+        self.assertNotIn("FLAT", names)                  # a mover with no side is not a candidate
+        self.assertNotIn("SOL-USD", names)               # a coin is not a stock
+        self.assertEqual(next(c for c in pool if c["ticker"] == "NVDA")["source"], "your watchlist")  # the watchlist's row wins
+
+    def test_movers_are_the_busiest_names_off_the_watchlist_that_show_a_signal(self):
+        backtests = daily_scan.backtests
+        quote = lambda t, d1, vol: {"ticker": t, "d1": d1, "volRatio": vol}
+        screens = {"day_losers": [quote("DOWN", -8.0, 2.0), quote("NVDA", -9.0, 3.0)], "day_gainers": [quote("UP", 12.0, 3.0), quote("QUIET", 6.0, 1.0)],
+                   "most_actives": [quote("BUSY", 1.0, 5.0)]}
+        row = lambda t: {"ticker": t, "crypto": False, "error": None, "signals": [] if t == "QUIET" else ["volume 2.0× avg"], "bias": "long",
+                         "interest": 2, "price": 10.0}
+        backtests._movers.clear()
+        self.addCleanup(backtests._movers.clear)
+        with mock.patch.object(backtests.watchlist, "screen_stocks", side_effect=lambda name, cap, vol: {"rows": screens[name]}), \
+                mock.patch.object(backtests.watchlist, "load", return_value=["NVDA"]), \
+                mock.patch.object(backtests.watchlist, "_row", side_effect=row) as screened:
+            self.assertEqual([m["ticker"] for m in backtests.movers(3)], ["UP", "DOWN"])   # QUIET took a slot and showed no signal
+            self.assertEqual([c.args[0] for c in screened.call_args_list], ["UP", "DOWN", "QUIET"])
+            self.assertEqual([m["ticker"] for m in backtests.movers(30)], ["UP", "DOWN", "BUSY"])
+            backtests.movers(30)
+            self.assertEqual(screened.call_count, 7)     # the second ask of the same depth came from the cache
+
+
 if __name__ == "__main__":
     unittest.main()
