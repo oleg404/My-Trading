@@ -135,8 +135,8 @@ def pick_portfolio(portfolios: list[dict], active_id: str, ticker: str, wanted: 
 
 
 def size_quantity(equity: float, price: float, pct: float, ticker: str) -> float:
-    """`pct` percent of the portfolio's equity at `price`: whole shares, coins to 4 decimals."""
+    """`pct` percent of the portfolio's equity at `price`, to 4 decimals. Shares trade in fractions like coins,
+    so a pick gets its full size whatever one share costs."""
     if price <= 0 or equity <= 0 or pct <= 0:
         return 0.0
-    q = equity * pct / 100 / price
-    return int(q * 10000) / 10000 if is_coin(ticker) else float(int(q))
+    return int(equity * pct / 100 / price * 10000) / 10000

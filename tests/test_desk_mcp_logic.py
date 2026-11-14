@@ -83,7 +83,8 @@ class PortfolioTest(unittest.TestCase):
         self.assertFalse(logic.takes(self.pfs[1], "NVDA"))
 
     def test_sizing_is_ten_percent_of_equity(self):
-        self.assertEqual(logic.size_quantity(25000, 204.64, 10, "NVDA"), 12.0)
+        self.assertEqual(logic.size_quantity(25000, 204.64, 10, "NVDA"), 12.2165)   # shares in fractions, like coins
+        self.assertEqual(logic.size_quantity(10000, 641.39, 5, "META"), 0.7795)     # a share dearer than the size still opens
         self.assertEqual(logic.size_quantity(10000, 2300, 10, "ETH-USD"), 0.4347)
         self.assertEqual(logic.size_quantity(0, 100, 10, "NVDA"), 0.0)
 

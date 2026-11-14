@@ -56,10 +56,10 @@ class PositionReviewTest(unittest.TestCase):
     def position(self, ticker="LINK-USD"):
         return next((p for p in portfolios.book()["positions"] if p["ticker"] == ticker), None)
 
-    def test_half_of_a_position_is_four_decimals_of_a_coin_and_whole_shares(self):
+    def test_half_of_a_position_is_four_decimals_of_a_coin_or_a_share(self):
         self.assertEqual(position_review.half_quantity("LINK-USD", -27.6568), 13.8284)
-        self.assertEqual(position_review.half_quantity("NVDA", 11), 5.0)
-        self.assertEqual(position_review.half_quantity("NVDA", 1), 0.0)  # one share has no half
+        self.assertEqual(position_review.half_quantity("NVDA", 11), 5.5)
+        self.assertEqual(position_review.half_quantity("NVDA", 1), 0.5)  # one share has a half too
 
     def test_the_facts_measure_the_position_against_its_plan(self):
         f = position_review.facts(portfolios.book(), self.position(), JOB, 10.44, 10000.0)
@@ -94,10 +94,10 @@ class PositionReviewTest(unittest.TestCase):
         self.assertEqual(len(portfolios.book()["trades"]), 2)
         notify.assert_not_called()
 
-    def test_one_share_cannot_be_halved_and_a_failed_call_leaves_the_position(self):
+    def test_one_share_is_halved_and_a_failed_call_leaves_the_position(self):
         done = position_review.apply("main", "NVDA", {"action": "CLOSE HALF", "confidence": "low", "reason": "weak"}, 181.0)
-        self.assertEqual((done["closed"], self.position("NVDA")["quantity"]), (0.0, 1))
-        self.assertNotIn("trimmed", self.position("NVDA"))
+        self.assertEqual((done["closed"], self.position("NVDA")["quantity"]), (0.5, 0.5))
+        self.assertIn("trimmed", self.position("NVDA"))
         with quotes(**{"LINK-USD": 10.44}), mock.patch.object(claude_review, "ask", side_effect=RuntimeError("no answer")), mock.patch("builtins.print"):
             self.assertIsNone(position_review.judge("main", "LINK-USD", JOB))
         self.assertNotIn("review_claude", self.position())
@@ -147,7 +147,7 @@ class PositionReviewTest(unittest.TestCase):
         hold = {"action": "HOLD", "confidence": "high", "reason": "The agents still say Sell."}
         with quotes(**{"NVDA": 180.0}), mock.patch.object(claude_review, "ask", return_value=(hold, [])):
             position_review.after_review("main", "NVDA", {"decision": "BUY"})
-        self.assertEqual(self.position("NVDA")["quantity"], 2)  # held, and topped up from 1.8% towards 5%: one more whole share fits
+        self.assertAlmostEqual(self.position("NVDA")["quantity"], 2.7787, places=4)  # held, and topped up from 1.8% to the full 5%
 
     def test_with_the_half_close_switch_off_the_top_up_runs_without_claude(self):
         with quotes(**{"LINK-USD": 10.44}), mock.patch.object(claude_review, "ask") as ask:

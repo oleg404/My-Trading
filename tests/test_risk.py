@@ -91,7 +91,7 @@ class CapTest(BookTest):
 
     def test_sizing_helpers(self):
         self.assertEqual(risk.max_quantity(10000, 1223.56, "ZEC-USD"), 0.4086)  # coins to four decimals
-        self.assertEqual(risk.max_quantity(10000, 180, "NVDA"), 2.0)            # whole shares
+        self.assertEqual(risk.max_quantity(10000, 180, "NVDA"), 2.7777)         # and shares too
         self.assertIsNone(risk.over_cap(5, 105, 10000))                         # 5.25%: drift, not worth a trim
         self.assertEqual(risk.over_cap(-2.6881, 1150, 9800), 31.5)
         self.assertIsNone(risk.position_pct(1, 100, 0))

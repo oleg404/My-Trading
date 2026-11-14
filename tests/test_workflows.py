@@ -183,6 +183,16 @@ class WorkflowTest(unittest.TestCase):
         d = run["decisions"][0]
         self.assertEqual((d["action"], d["score"], d["pct"]), ("opened", 62, 5.0))  # the 5% cap in full: the score no longer shrinks it
 
+    def test_a_share_dearer_than_the_full_size_opens_as_a_fraction(self):
+        pid = portfolios.create({"name": "Stocks fraction", "rule": "stocks", "cash": 10000, "activate": True})["active"]
+        self.w.update(portfolio=pid, market="stocks")
+        with mock.patch.dict(PRICES, {"META": {"price": 641.39, "previous": 640.0}}):
+            run = self.run_pass(scan([studied("META", lean="short")], [pick("META", "STRONG SELL", "short")]))
+        d = run["decisions"][0]
+        self.assertEqual((d["action"], d["pct"]), ("opened", 5.0))
+        self.assertAlmostEqual(d["quantity"], 0.7795, places=4)  # 5% of 10,000 at 641.39: under one share, and still the full size
+        self.assertAlmostEqual(portfolios.book(pid)["positions"][0]["quantity"], -0.7795, places=4)
+
     def test_a_held_pick_is_topped_up_to_the_full_size(self):
         portfolios.record_trade({"portfolio": self.pid, "ticker": "SOL-USD", "side": "buy", "quantity": 0.5, "price": 200.0,
                                  "stop": 190.0, "target": 230.0, "note": "Workflow first: probe long at score 45"})  # 1% of the book
