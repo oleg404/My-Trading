@@ -133,7 +133,9 @@ class PassTest(unittest.TestCase):
         self.w = workflows.clean({"name": "Crypto every 4h", "portfolio": self.pid})
         self.w.update(id="a" * 32, runs=[], lastRun=None)
         for target, name, value in ((workflows.checks, "notify", None), (claude_review, "get", {"review": {"stop": 97000.0, "target": 106000.0}}),
-                                    (risk, "regime", regime()), (lessons, "journal", []), (store, "daily_bars", bars())):
+                                    (risk, "regime", regime()), (lessons, "journal", []), (store, "daily_bars", bars()),
+                                    (risk, "snapback", {"sides": [], "up": 1.0, "down": 1.0, "why": ""}),
+                                    (workflows.market_hours, "is_open", True)):
             mock.patch.object(target, name, return_value=value).start()
         mock.patch.object(risk, "MAX_INVESTED_PCT", 5.2).start()
         self.doc = scan([studied("BTC-USD")], [pick("BTC-USD", "STRONG BUY", "long")])

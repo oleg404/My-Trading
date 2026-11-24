@@ -24,12 +24,14 @@ import claude_review  # noqa: E402
 import conviction  # noqa: E402
 import daily_scan  # noqa: E402
 import lessons  # noqa: E402
+import market_hours  # noqa: E402
 import portfolios  # noqa: E402
 import risk  # noqa: E402
 import store  # noqa: E402
 import workflows  # noqa: E402
 
-PRICES = {"BTC-USD": {"price": 100000.0, "previous": 99000.0}, "SOL-USD": {"price": 200.0, "previous": 210.0},
+QUIET = {"sides": [], "up": 1.0, "down": 1.0, "why": ""}
+PRICES ={"BTC-USD": {"price": 100000.0, "previous": 99000.0}, "SOL-USD": {"price": 200.0, "previous": 210.0},
           "ETH-USD": {"price": 4000.0, "previous": 4100.0}, "NVDA": {"price": 180.0, "previous": 179.0}}
 
 
@@ -118,6 +120,8 @@ class WorkflowTest(unittest.TestCase):
         self.regime.start()
         self.journal = mock.patch.object(lessons, "journal", return_value=[])   # no closed trades unless a test gives some
         self.journal.start()
+        mock.patch.object(risk, "snapback", return_value=QUIET).start()  # no snapback unless a test sets one
+        mock.patch.object(market_hours, "is_open", return_value=True).start()  # the tests do not depend on the clock
 
     def tearDown(self):
         mock.patch.stopall()

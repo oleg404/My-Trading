@@ -21,6 +21,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "tradingagents" 
 
 import claude_review  # noqa: E402
 import lessons  # noqa: E402
+import market_hours  # noqa: E402
 import portfolios  # noqa: E402
 import position_review  # noqa: E402
 import risk  # noqa: E402
@@ -47,7 +48,9 @@ class PositionReviewTest(unittest.TestCase):
         for p in (mock.patch.object(store, "levels", return_value={"atrPct": 2.0}), mock.patch.object(store, "read_report", return_value={"rating": "Hold", "summary": "range-bound"}),
                   mock.patch.object(lessons, "brief", return_value={"market_regime": "no clear regime", "desk_record": []}),
                   mock.patch.object(claude_review, "ready", return_value={"ready": True, "reason": ""}),
-                  mock.patch.object(risk, "regime", return_value={"side": None, "strength": None})):
+                  mock.patch.object(risk, "regime", return_value={"side": None, "strength": None}),
+                  mock.patch.object(risk, "snapback", return_value={"sides": [], "up": 1.0, "down": 1.0, "why": ""}),
+                  mock.patch.object(market_hours, "is_open", return_value=True)):
             p.start(); self.addCleanup(p.stop)
         with quotes():
             portfolios.record_trade({"ticker": "LINK-USD", "side": "sell", "quantity": 27.6568, "price": 10.84, "stop": 11.4, "target": 9.56})
@@ -122,6 +125,17 @@ class PositionReviewTest(unittest.TestCase):
         self.assertEqual((trade["side"], trade["price"]), ("sell", 10.44))
         self.assertTrue(trade["note"].startswith("Review: added to the short, the agents still say SELL; 2.12% more, now 5.0% of the book"))
         notify.assert_called_once()
+
+    def test_no_top_up_at_a_closed_market_into_a_snapback_or_in_a_braked_book(self):
+        with quotes(**{"LINK-USD": 10.44}):
+            with mock.patch.object(market_hours, "is_open", return_value=False):
+                self.assertIsNone(position_review.top_up("main", "LINK-USD", SELL))  # no fill at the last close
+            with mock.patch.object(risk, "snapback", return_value={"sides": ["short"], "up": 7.0, "down": 1.0, "why": "bounced"}):
+                self.assertIsNone(position_review.top_up("main", "LINK-USD", SELL))  # the market snapped back against the short
+            with mock.patch.object(position_review.workflow_rules, "brake", return_value="3 stop-outs"):
+                self.assertIsNone(position_review.top_up("main", "LINK-USD", SELL))  # the book's brake is on
+            self.assertAlmostEqual(self.pct(), 2.88, places=2)
+            self.assertIsNotNone(position_review.top_up("main", "LINK-USD", SELL))   # all clear: it is topped up
 
     def test_no_top_up_when_the_agents_left_the_side_or_the_regime_or_a_halving_says_no(self):
         with quotes(**{"LINK-USD": 10.44}):
